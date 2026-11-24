@@ -18,6 +18,7 @@ import {
   updateClass,
   updateSubject,
 } from '../services/firestoreMasters';
+import { ConfirmDeleteDialog, type ConfirmDeleteTarget } from './ConfirmDeleteDialog';
 
 interface MastersPageProps {
   userId: string;
@@ -50,7 +51,7 @@ export const MastersPage: React.FC<MastersPageProps> = ({
   const [editingSubjectLang, setEditingSubjectLang] = useState<BookLanguage>('en');
 
   // Delete confirm state
-  const [confirmDeleteKey, setConfirmDeleteKey] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ConfirmDeleteTarget | null>(null);
 
   // Busy & feedback states
   const [submitting, setSubmitting] = useState<'add' | null>(null);
@@ -59,7 +60,7 @@ export const MastersPage: React.FC<MastersPageProps> = ({
   const switchTab = (tab: MasterTab) => {
     setActiveTab(tab);
     setEditingId(null);
-    setConfirmDeleteKey(null);
+    setDeleteTarget(null);
     setErrorMsg(null);
   };
 
@@ -326,7 +327,6 @@ export const MastersPage: React.FC<MastersPageProps> = ({
                 ) : (
                   boards.map((board) => {
                     const isEditing = editingId === board.id;
-                    const deleteKey = `board-${board.id}`;
                     return (
                       <div key={board.id} className="py-2.5 flex items-center justify-between gap-2">
                         {isEditing ? (
@@ -375,36 +375,20 @@ export const MastersPage: React.FC<MastersPageProps> = ({
                               >
                                 <Edit3 className="w-4 h-4" />
                               </button>
-                              {confirmDeleteKey === deleteKey ? (
-                                <div className="flex items-center gap-1">
-                                  <button
-                                    type="button"
-                                    onClick={async () => {
-                                      await deleteBoard(board.id);
-                                      setConfirmDeleteKey(null);
-                                    }}
-                                    className="min-h-[36px] px-2.5 py-1 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg"
-                                  >
-                                    Delete
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => setConfirmDeleteKey(null)}
-                                    className="min-h-[36px] px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg"
-                                  >
-                                    No
-                                  </button>
-                                </div>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => setConfirmDeleteKey(deleteKey)}
-                                  aria-label={`Delete ${board.name}`}
-                                  className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              )}
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setDeleteTarget({
+                                    itemName: board.name,
+                                    description: 'from Boards',
+                                    onConfirm: () => deleteBoard(board.id),
+                                  })
+                                }
+                                aria-label={`Delete ${board.name}`}
+                                className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
                             </div>
                           </>
                         )}
@@ -422,7 +406,6 @@ export const MastersPage: React.FC<MastersPageProps> = ({
                 ) : (
                   classes.map((cls) => {
                     const isEditing = editingId === cls.id;
-                    const deleteKey = `class-${cls.id}`;
                     return (
                       <div key={cls.id} className="py-2.5 flex items-center justify-between gap-2">
                         {isEditing ? (
@@ -471,36 +454,20 @@ export const MastersPage: React.FC<MastersPageProps> = ({
                               >
                                 <Edit3 className="w-4 h-4" />
                               </button>
-                              {confirmDeleteKey === deleteKey ? (
-                                <div className="flex items-center gap-1">
-                                  <button
-                                    type="button"
-                                    onClick={async () => {
-                                      await deleteClass(cls.id);
-                                      setConfirmDeleteKey(null);
-                                    }}
-                                    className="min-h-[36px] px-2.5 py-1 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg"
-                                  >
-                                    Delete
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => setConfirmDeleteKey(null)}
-                                    className="min-h-[36px] px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg"
-                                  >
-                                    No
-                                  </button>
-                                </div>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => setConfirmDeleteKey(deleteKey)}
-                                  aria-label={`Delete ${cls.name}`}
-                                  className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              )}
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setDeleteTarget({
+                                    itemName: cls.name,
+                                    description: 'from Classes',
+                                    onConfirm: () => deleteClass(cls.id),
+                                  })
+                                }
+                                aria-label={`Delete ${cls.name}`}
+                                className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
                             </div>
                           </>
                         )}
@@ -518,7 +485,6 @@ export const MastersPage: React.FC<MastersPageProps> = ({
                 ) : (
                   subjects.map((subj) => {
                     const isEditing = editingId === subj.id;
-                    const deleteKey = `subject-${subj.id}`;
                     return (
                       <div key={subj.id} className="py-2.5 flex items-center justify-between gap-2">
                         {isEditing ? (
@@ -600,36 +566,20 @@ export const MastersPage: React.FC<MastersPageProps> = ({
                               >
                                 <Edit3 className="w-4 h-4" />
                               </button>
-                              {confirmDeleteKey === deleteKey ? (
-                                <div className="flex items-center gap-1">
-                                  <button
-                                    type="button"
-                                    onClick={async () => {
-                                      await deleteSubject(subj.id);
-                                      setConfirmDeleteKey(null);
-                                    }}
-                                    className="min-h-[36px] px-2.5 py-1 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg"
-                                  >
-                                    Delete
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => setConfirmDeleteKey(null)}
-                                    className="min-h-[36px] px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg"
-                                  >
-                                    No
-                                  </button>
-                                </div>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => setConfirmDeleteKey(deleteKey)}
-                                  aria-label={`Delete ${subj.name}`}
-                                  className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              )}
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setDeleteTarget({
+                                    itemName: subj.name,
+                                    description: 'from Subjects',
+                                    onConfirm: () => deleteSubject(subj.id),
+                                  })
+                                }
+                                aria-label={`Delete ${subj.name}`}
+                                className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
                             </div>
                           </>
                         )}
@@ -642,6 +592,11 @@ export const MastersPage: React.FC<MastersPageProps> = ({
           </section>
         </div>
       )}
+
+      <ConfirmDeleteDialog
+        target={deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+      />
     </div>
   );
 };

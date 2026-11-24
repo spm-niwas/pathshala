@@ -20,12 +20,14 @@ import {
   type ScanPagesApiResponse,
   type ScannedPageRecord,
 } from '../types/book';
-import { compressBookPhoto } from '../utils/imageCompress';
+import { compressBookPhoto, type CompressedPhotoPayload } from '../utils/imageCompress';
 import {
   deleteSavedPageImage,
   saveChapterContent,
   subscribeToChapterPages,
 } from '../services/firestoreBooks';
+import { ConfirmDeleteDialog, type ConfirmDeleteTarget } from './ConfirmDeleteDialog';
+import { ContinuousCameraModal } from './ContinuousCameraModal';
 
 interface ChapterScannerProps {
   book: Book;
@@ -33,6 +35,7 @@ interface ChapterScannerProps {
   userId: string;
   userEmail: string | null | undefined;
   onBack: () => void;
+  onSaved?: (savedTitle: string) => void;
 }
 
 export const ChapterScanner: React.FC<ChapterScannerProps> = ({
@@ -41,6 +44,7 @@ export const ChapterScanner: React.FC<ChapterScannerProps> = ({
   userId,
   userEmail,
   onBack,
+  onSaved,
 }) => {
   const [chapterNumber, setChapterNumber] = useState<number>(chapter.chapterNumber);
   const [title, setTitle] = useState<string>(chapter.title);
@@ -57,6 +61,8 @@ export const ChapterScanner: React.FC<ChapterScannerProps> = ({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ConfirmDeleteTarget | null>(null);
+  const [showCameraModal, setShowCameraModal] = useState(false);
   const [detectedHeading, setDetectedHeading] = useState<{
     chapterNumber: number;
     title: string;
@@ -98,9 +104,11 @@ export const ChapterScanner: React.FC<ChapterScannerProps> = ({
     setSuccessMsg(null);
 
     try {
-      const remainingSlots = Math.max(0, 12 - pendingPhotos.length);
+      const remainingSlots = Math.max(0, CHAPTER_LIMITS.maxPages - pendingPhotos.length);
       if (files.length > remainingSlots) {
-        setErrorMsg(`You can queue up to 12 pages per scan batch. Added the first ${remainingSlots}.`);
+        setErrorMsg(
+          `Chapters support up to ${CHAPTER_LIMITS.maxPages} pages. Added the first ${remainingSlots}.`
+        );
       }
       const filesToProcess = files.slice(0, remainingSlots);
       const nextItems: PendingPhoto[] = [];
@@ -129,6 +137,30 @@ export const ChapterScanner: React.FC<ChapterScannerProps> = ({
     } finally {
       setCompressing(false);
     }
+  };
+
+  const handleCameraPhotosDone = (captured: CompressedPhotoPayload[]) => {
+    setShowCameraModal(false);
+    if (captured.length === 0) return;
+
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setPendingPhotos((prev) => {
+      const remainingSlots = Math.max(0, CHAPTER_LIMITS.maxPages - prev.length);
+      const added: PendingPhoto[] = captured.slice(0, remainingSlots).map((compressed, idx) => ({
+        localId: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${idx}`,
+        pageNumber: prev.length + idx + 1,
+        previewUrl: compressed.previewUrl,
+        ocrBase64: compressed.ocrBase64,
+        ocrMimeType: compressed.ocrMimeType,
+        archivalDataUrl: compressed.archivalDataUrl,
+        keepImage: false,
+        hasDiagram: false,
+        diagramNote: '',
+        extractedText: '',
+      }));
+      return [...prev, ...added].map((item, idx) => ({ ...item, pageNumber: idx + 1 }));
+    });
   };
 
   const movePhoto = (index: number, direction: -1 | 1) => {
@@ -294,11 +326,15 @@ export const ChapterScanner: React.FC<ChapterScannerProps> = ({
       });
 
       setStatus(nextStatus);
-      setSuccessMsg(
-        nextStatus === 'ready'
-          ? 'Chapter saved to Firebase.'
-          : 'Draft saved to Firebase.'
-      );
+      if (nextStatus === 'ready') {
+        if (onSaved) {
+          onSaved(title.trim());
+        } else {
+          onBack();
+        }
+        return;
+      }
+      setSuccessMsg('Draft saved to Firebase.');
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Failed to save chapter.');
     } finally {
@@ -411,7 +447,7 @@ export const ChapterScanner: React.FC<ChapterScannerProps> = ({
               1. Scan Book Pages
             </h2>
             <span className="text-xs text-slate-500 tabular-nums">
-              {pendingPhotos.length}/12 queued
+              {pendingPhotos.length} queued
             </span>
           </div>
           <p className="text-sm text-slate-600 mb-4">
@@ -440,8 +476,8 @@ export const ChapterScanner: React.FC<ChapterScannerProps> = ({
           <div className="grid grid-cols-2 gap-3 mb-5">
             <button
               type="button"
-              disabled={compressing || pendingPhotos.length >= 12}
-              onClick={() => cameraInputRef.current?.click()}
+              disabled={compressing || pendingPhotos.length >= CHAPTER_LIMITS.maxPages}
+              onClick={() => setShowCameraModal(true)}
               className="min-h-[48px] px-4 py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-xl transition-colors flex items-center justify-center gap-2 whitespace-nowrap"
             >
               <Camera className="w-4 h-4 shrink-0" />
@@ -449,7 +485,7 @@ export const ChapterScanner: React.FC<ChapterScannerProps> = ({
             </button>
             <button
               type="button"
-              disabled={compressing || pendingPhotos.length >= 12}
+              disabled={compressing || pendingPhotos.length >= CHAPTER_LIMITS.maxPages}
               onClick={() => galleryInputRef.current?.click()}
               className="min-h-[48px] px-4 py-3 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-900 text-sm font-medium rounded-xl transition-colors flex items-center justify-center gap-2 whitespace-nowrap"
             >
@@ -516,8 +552,14 @@ export const ChapterScanner: React.FC<ChapterScannerProps> = ({
                           </button>
                           <button
                             type="button"
-                            onClick={() => removePhoto(photo.localId)}
-                            aria-label={`Remove page ${photo.pageNumber}`}
+                            onClick={() =>
+                              setDeleteTarget({
+                                itemName: `Page ${photo.pageNumber}`,
+                                description: 'from the scan queue',
+                                onConfirm: () => removePhoto(photo.localId),
+                              })
+                            }
+                            aria-label={`Delete page ${photo.pageNumber}`}
                             className="min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-red-600 hover:bg-red-50"
                           >
                             <Trash2 className="w-4 h-4" />
@@ -706,11 +748,17 @@ export const ChapterScanner: React.FC<ChapterScannerProps> = ({
                       </span>
                       <button
                         type="button"
-                        onClick={() => deleteSavedPageImage(book.id, chapter.id, page.id)}
-                        aria-label={`Remove saved photo for page ${page.pageNumber}`}
+                        onClick={() =>
+                          setDeleteTarget({
+                            itemName: `Saved photo for Page ${page.pageNumber}`,
+                            description: 'from Firebase',
+                            onConfirm: () => deleteSavedPageImage(book.id, chapter.id, page.id),
+                          })
+                        }
+                        aria-label={`Delete saved photo for page ${page.pageNumber}`}
                         className="text-xs text-red-600 hover:text-red-800 font-medium"
                       >
-                        Remove
+                        Delete
                       </button>
                     </div>
                   </div>
@@ -758,6 +806,21 @@ export const ChapterScanner: React.FC<ChapterScannerProps> = ({
             className="max-w-full max-h-[88vh] rounded-xl object-contain bg-white"
           />
         </div>
+      )}
+
+      <ConfirmDeleteDialog
+        target={deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+      />
+
+      {showCameraModal && (
+        <ContinuousCameraModal
+          startingPageNumber={pendingPhotos.length + 1}
+          maxRemaining={Math.max(0, CHAPTER_LIMITS.maxPages - pendingPhotos.length)}
+          onDone={handleCameraPhotosDone}
+          onCancel={() => setShowCameraModal(false)}
+          onFallbackNativeCamera={() => cameraInputRef.current?.click()}
+        />
       )}
     </div>
   );

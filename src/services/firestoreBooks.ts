@@ -32,6 +32,31 @@ function clampString(value: string, maxLength: number): string {
   return value.trim().slice(0, maxLength);
 }
 
+export function getTimestampMillis(ts: unknown): number {
+  if (!ts) return 0;
+  if (typeof ts === 'number') return ts;
+  if (ts instanceof Date) return ts.getTime();
+  if (typeof ts === 'object') {
+    const maybe = ts as { toMillis?: () => number; seconds?: number; nanoseconds?: number };
+    if (typeof maybe.toMillis === 'function') {
+      return maybe.toMillis();
+    }
+    if (typeof maybe.seconds === 'number') {
+      return maybe.seconds * 1000 + Math.floor((maybe.nanoseconds ?? 0) / 1e6);
+    }
+  }
+  return 0;
+}
+
+export function sortBooksByLatestEdited(items: Book[]): Book[] {
+  return [...items].sort((a, b) => {
+    const aTime = Math.max(getTimestampMillis(a.updatedAt), getTimestampMillis(a.createdAt));
+    const bTime = Math.max(getTimestampMillis(b.updatedAt), getTimestampMillis(b.createdAt));
+    if (bTime !== aTime) return bTime - aTime;
+    return a.title.localeCompare(b.title);
+  });
+}
+
 export function subscribeToBooks(
   userId: string,
   userEmail: string | null | undefined,
@@ -39,19 +64,19 @@ export function subscribeToBooks(
 ): Unsubscribe {
   const path = 'books';
   const booksRef = collection(db, path);
-  const q =
-    userEmail === BOOTSTRAPPED_ADMIN_EMAIL
-      ? query(booksRef, orderBy('updatedAt', 'desc'))
-      : query(booksRef, where('ownerId', '==', userId));
+  const isBootstrapped = (userEmail || '').trim().toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL;
+  const q = isBootstrapped
+    ? query(booksRef, orderBy('updatedAt', 'desc'))
+    : query(booksRef, where('ownerId', '==', userId));
 
   return onSnapshot(
     q,
     (snapshot) => {
       const items: Book[] = snapshot.docs.map((docSnap) => ({
         id: docSnap.id,
-        ...(docSnap.data() as Omit<Book, 'id'>),
+        ...(docSnap.data({ serverTimestamps: 'estimate' }) as Omit<Book, 'id'>),
       }));
-      onData(items);
+      onData(sortBooksByLatestEdited(items));
     },
     (error) => {
       handleFirestoreError(error, OperationType.LIST, path);
@@ -163,10 +188,10 @@ export function subscribeToChapters(
 ): Unsubscribe {
   const path = `books/${bookId}/chapters`;
   const chaptersRef = collection(db, 'books', bookId, 'chapters');
-  const q =
-    userEmail === BOOTSTRAPPED_ADMIN_EMAIL
-      ? query(chaptersRef, orderBy('chapterNumber', 'asc'))
-      : query(chaptersRef, where('ownerId', '==', userId));
+  const isBootstrapped = (userEmail || '').trim().toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL;
+  const q = isBootstrapped
+    ? query(chaptersRef, orderBy('chapterNumber', 'asc'))
+    : query(chaptersRef, where('ownerId', '==', userId));
 
   return onSnapshot(
     q,
@@ -290,10 +315,10 @@ export function subscribeToChapterPages(
 ): Unsubscribe {
   const path = `books/${bookId}/chapters/${chapterId}/pages`;
   const pagesRef = collection(db, 'books', bookId, 'chapters', chapterId, 'pages');
-  const q =
-    userEmail === BOOTSTRAPPED_ADMIN_EMAIL
-      ? query(pagesRef, orderBy('pageNumber', 'asc'))
-      : query(pagesRef, where('ownerId', '==', userId));
+  const isBootstrapped = (userEmail || '').trim().toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL;
+  const q = isBootstrapped
+    ? query(pagesRef, orderBy('pageNumber', 'asc'))
+    : query(pagesRef, where('ownerId', '==', userId));
 
   return onSnapshot(
     q,
@@ -384,6 +409,10 @@ export async function saveChapterContent(
       updatedAt: serverTimestamp(),
     });
 
+    batch.update(doc(db, 'books', bookId), {
+      updatedAt: serverTimestamp(),
+    });
+
     await batch.commit();
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
@@ -428,6 +457,9 @@ export async function deleteSavedPageImage(
     });
     batch.update(doc(db, 'books', bookId, 'chapters', chapterId), {
       savedImageCount: increment(-1),
+      updatedAt: serverTimestamp(),
+    });
+    batch.update(doc(db, 'books', bookId), {
       updatedAt: serverTimestamp(),
     });
     await batch.commit();

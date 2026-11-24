@@ -18,6 +18,7 @@ import {
 } from '../types/book';
 import { compressBookPhoto } from '../utils/imageCompress';
 import { createChaptersBatch } from '../services/firestoreBooks';
+import { ConfirmDeleteDialog, type ConfirmDeleteTarget } from './ConfirmDeleteDialog';
 
 interface IndexPhoto {
   localId: string;
@@ -58,6 +59,7 @@ export const IndexScannerModal: React.FC<IndexScannerModalProps> = ({
   const [extracting, setExtracting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ConfirmDeleteTarget | null>(null);
 
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
   const galleryInputRef = useRef<HTMLInputElement | null>(null);
@@ -333,8 +335,14 @@ export const IndexScannerModal: React.FC<IndexScannerModalProps> = ({
                         </span>
                         <button
                           type="button"
-                          onClick={() => removePhoto(photo.localId)}
-                          aria-label={`Remove index page ${photo.pageNumber}`}
+                          onClick={() =>
+                            setDeleteTarget({
+                              itemName: `Index Page ${photo.pageNumber}`,
+                              description: 'from this index scan',
+                              onConfirm: () => removePhoto(photo.localId),
+                            })
+                          }
+                          aria-label={`Delete index page ${photo.pageNumber}`}
                           className="min-w-[32px] min-h-[32px] flex items-center justify-center rounded-lg text-red-600 hover:bg-red-50"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -434,8 +442,16 @@ export const IndexScannerModal: React.FC<IndexScannerModalProps> = ({
 
                       <button
                         type="button"
-                        onClick={() => removeRow(row.rowId)}
-                        aria-label="Remove row"
+                        onClick={() =>
+                          setDeleteTarget({
+                            itemName: row.title.trim()
+                              ? `Chapter ${row.chapterNumber}: ${row.title.trim()}`
+                              : `Chapter ${row.chapterNumber} row`,
+                            description: 'from this extracted list',
+                            onConfirm: () => removeRow(row.rowId),
+                          })
+                        }
+                        aria-label={`Delete chapter row ${row.chapterNumber}`}
                         className="mt-1 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 shrink-0"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -515,6 +531,11 @@ export const IndexScannerModal: React.FC<IndexScannerModalProps> = ({
           )}
         </div>
       </div>
+
+      <ConfirmDeleteDialog
+        target={deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+      />
     </div>
   );
 };

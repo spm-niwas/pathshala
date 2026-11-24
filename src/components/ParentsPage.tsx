@@ -21,6 +21,7 @@ import {
   normalizeParentName,
   updateParent,
 } from '../services/firestoreParents';
+import { ConfirmDeleteDialog, type ConfirmDeleteTarget } from './ConfirmDeleteDialog';
 
 interface ParentsPageProps {
   userId: string;
@@ -46,7 +47,7 @@ export const ParentsPage: React.FC<ParentsPageProps> = ({
   const [editingName, setEditingName] = useState('');
   const [editingEmail, setEditingEmail] = useState('');
 
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ConfirmDeleteTarget | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -357,36 +358,20 @@ export const ParentsPage: React.FC<ParentsPageProps> = ({
                             <Edit3 className="w-4 h-4" />
                           </button>
 
-                          {confirmDeleteId === parent.id ? (
-                            <div className="flex items-center gap-1">
-                              <button
-                                type="button"
-                                onClick={async () => {
-                                  await deleteParent(parent.id);
-                                  setConfirmDeleteId(null);
-                                }}
-                                className="min-h-[36px] px-2.5 py-1 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg"
-                              >
-                                Delete
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setConfirmDeleteId(null)}
-                                className="min-h-[36px] px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg"
-                              >
-                                No
-                              </button>
-                            </div>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => setConfirmDeleteId(parent.id)}
-                              aria-label={`Delete ${parent.name}`}
-                              className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          )}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setDeleteTarget({
+                                itemName: parent.name,
+                                description: `(${parent.email}) from Parents`,
+                                onConfirm: () => deleteParent(parent.id),
+                              })
+                            }
+                            aria-label={`Delete ${parent.name}`}
+                            className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
                         </div>
                       </>
                     )}
@@ -426,6 +411,11 @@ export const ParentsPage: React.FC<ParentsPageProps> = ({
           </>
         )}
       </section>
+
+      <ConfirmDeleteDialog
+        target={deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+      />
     </div>
   );
 };

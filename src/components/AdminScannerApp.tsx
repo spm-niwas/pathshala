@@ -27,6 +27,8 @@ import {
   createChapter,
   deleteBookWithContents,
   deleteChapter,
+  getTimestampMillis,
+  sortBooksByLatestEdited,
   subscribeToBooks,
   subscribeToChapters,
   updateBook,
@@ -46,13 +48,49 @@ import {
   type MasterSubject,
   type ParentAccount,
 } from '../types/book';
+import { BookCoverGraphic } from './BookCoverGraphic';
 import { BookFormModal } from './BookFormModal';
 import { ChapterScanner } from './ChapterScanner';
+import { ConfirmDeleteDialog, type ConfirmDeleteTarget } from './ConfirmDeleteDialog';
 import { IndexScannerModal } from './IndexScannerModal';
 import { MastersPage } from './MastersPage';
 import { ParentsPage } from './ParentsPage';
 
 type ActiveSection = 'bookshelf' | 'masters' | 'parents';
+
+function formatEditedLabel(updatedAt: unknown, createdAt: unknown): string {
+  const millis = Math.max(getTimestampMillis(updatedAt), getTimestampMillis(createdAt));
+  if (!millis) return 'Just now';
+
+  const date = new Date(millis);
+  const now = new Date();
+  const isToday =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+
+  if (isToday) {
+    return new Intl.DateTimeFormat(undefined, {
+      hour: 'numeric',
+      minute: '2-digit',
+    }).format(date);
+  }
+
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  const isYesterday =
+    date.getFullYear() === yesterday.getFullYear() &&
+    date.getMonth() === yesterday.getMonth() &&
+    date.getDate() === yesterday.getDate();
+
+  if (isYesterday) return 'Yesterday';
+
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    ...(date.getFullYear() !== now.getFullYear() ? { year: 'numeric' } : {}),
+  }).format(date);
+}
 
 export const AdminScannerApp: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
@@ -89,8 +127,7 @@ export const AdminScannerApp: React.FC = () => {
   const [showIndexScanner, setShowIndexScanner] = useState(false);
   const [indexSuccessMessage, setIndexSuccessMessage] = useState<string | null>(null);
 
-  const [confirmDeleteBookId, setConfirmDeleteBookId] = useState<string | null>(null);
-  const [confirmDeleteChapterId, setConfirmDeleteChapterId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ConfirmDeleteTarget | null>(null);
   const [showAccountMenu, setShowAccountMenu] = useState(false);
   const [avatarFailed, setAvatarFailed] = useState(false);
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
@@ -249,8 +286,9 @@ export const AdminScannerApp: React.FC = () => {
   }, [subjects, books]);
 
   const filteredBooks = useMemo(() => {
-    if (subjectFilter === 'All') return books;
-    return books.filter((b) => b.subject === subjectFilter);
+    const matching =
+      subjectFilter === 'All' ? books : books.filter((b) => b.subject === subjectFilter);
+    return sortBooksByLatestEdited(matching);
   }, [books, subjectFilter]);
 
   const handleSignIn = async () => {
@@ -596,7 +634,13 @@ export const AdminScannerApp: React.FC = () => {
             chapter={selectedChapter}
             userId={user.uid}
             userEmail={user.email}
-            onBack={() => setSelectedChapterId(null)}
+            onBack={() => {
+              setSelectedChapterId(null);
+            }}
+            onSaved={(savedTitle) => {
+              setSelectedChapterId(null);
+              setIndexSuccessMessage(`Saved "${savedTitle}" to ${selectedBook.title}.`);
+            }}
           />
         ) : selectedBook ? (
           /* Book Detail -> Chapters List */
@@ -638,33 +682,33 @@ export const AdminScannerApp: React.FC = () => {
             </div>
 
             <div className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 mb-6">
-              <div className="flex flex-wrap items-start justify-between gap-4">
-                <div>
-                  <h1 className="font-display text-xl sm:text-2xl font-bold text-slate-900 mb-1.5 text-balance">
+              <div>
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  <h1 className="font-display text-xl sm:text-2xl font-bold text-slate-900 text-balance">
                     {selectedBook.title}
                   </h1>
-                  <div className="flex flex-wrap items-center gap-2 text-xs sm:text-sm text-slate-500">
-                    <span>{selectedBook.subject}</span>
-                    <span aria-hidden="true">·</span>
-                    <span>{selectedBook.language === 'hi' ? 'हिन्दी (Hindi)' : 'English'}</span>
-                    <span aria-hidden="true">·</span>
-                    <span>{selectedBook.board} {selectedBook.grade}</span>
-                    <span aria-hidden="true">·</span>
-                    <span className="tabular-nums">{chapters.length} chapters</span>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingBook(selectedBook);
+                      setShowBookModal(true);
+                    }}
+                    aria-label={`Edit ${selectedBook.title}`}
+                    title="Edit book details"
+                    className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors shrink-0"
+                  >
+                    <Edit3 className="w-4 h-4" />
+                  </button>
                 </div>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEditingBook(selectedBook);
-                    setShowBookModal(true);
-                  }}
-                  className="min-h-[40px] px-3.5 py-2 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors inline-flex items-center gap-1.5 whitespace-nowrap"
-                >
-                  <Edit3 className="w-3.5 h-3.5 shrink-0" />
-                  Edit Book
-                </button>
+                <div className="flex flex-wrap items-center gap-2 text-xs sm:text-sm text-slate-500">
+                  <span>{selectedBook.subject}</span>
+                  <span aria-hidden="true">·</span>
+                  <span>{selectedBook.language === 'hi' ? 'हिन्दी (Hindi)' : 'English'}</span>
+                  <span aria-hidden="true">·</span>
+                  <span>{selectedBook.board} {selectedBook.grade}</span>
+                  <span aria-hidden="true">·</span>
+                  <span className="tabular-nums">{chapters.length} chapters</span>
+                </div>
               </div>
             </div>
 
@@ -780,7 +824,10 @@ export const AdminScannerApp: React.FC = () => {
                   >
                     <button
                       type="button"
-                      onClick={() => setSelectedChapterId(ch.id)}
+                      onClick={() => {
+                        setIndexSuccessMessage(null);
+                        setSelectedChapterId(ch.id);
+                      }}
                       className="flex-1 min-w-0 text-left py-1"
                     >
                       <div className="font-display text-sm sm:text-base font-semibold text-slate-900 truncate">
@@ -798,40 +845,27 @@ export const AdminScannerApp: React.FC = () => {
                     </button>
 
                     <div className="flex items-center gap-1 shrink-0">
-                      {confirmDeleteChapterId === ch.id ? (
-                        <div className="flex items-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              await deleteChapter(selectedBook.id, ch.id);
-                              setConfirmDeleteChapterId(null);
-                            }}
-                            className="min-h-[36px] px-2.5 py-1 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg"
-                          >
-                            Delete
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setConfirmDeleteChapterId(null)}
-                            className="min-h-[36px] px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => setConfirmDeleteChapterId(ch.id)}
-                          aria-label={`Delete chapter ${ch.title}`}
-                          className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setDeleteTarget({
+                            itemName: `Chapter ${ch.chapterNumber}: ${ch.title}`,
+                            description: 'and all of its scanned pages',
+                            onConfirm: () => deleteChapter(selectedBook.id, ch.id),
+                          })
+                        }
+                        aria-label={`Delete chapter ${ch.title}`}
+                        className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
 
                       <button
                         type="button"
-                        onClick={() => setSelectedChapterId(ch.id)}
+                        onClick={() => {
+                          setIndexSuccessMessage(null);
+                          setSelectedChapterId(ch.id);
+                        }}
                         aria-label={`Open scanner for ${ch.title}`}
                         className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl text-slate-500 hover:text-slate-900 hover:bg-slate-100"
                       >
@@ -937,86 +971,103 @@ export const AdminScannerApp: React.FC = () => {
                 </button>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredBooks.map((book) => (
-                  <article
-                    key={book.id}
-                    className="bg-white border border-slate-200 rounded-2xl p-5 flex flex-col justify-between hover:border-slate-300 transition-colors"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => setSelectedBookId(book.id)}
-                      className="text-left w-full mb-4"
-                    >
-                      <h2 className="font-display text-lg font-semibold text-slate-900 mb-1.5 leading-snug">
-                        {book.title}
-                      </h2>
-                      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                        <span>{book.subject}</span>
-                        <span aria-hidden="true">·</span>
-                        <span>{book.language === 'hi' ? 'हिन्दी' : 'English'}</span>
-                        <span aria-hidden="true">·</span>
-                        <span>{book.board} {book.grade}</span>
-                      </div>
-                    </button>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
+                {filteredBooks.map((book) => {
+                  const openBookEditWorkspace = () => {
+                    setIndexSuccessMessage(null);
+                    setSelectedBookId(book.id);
+                  };
 
-                    <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+                  return (
+                    <article
+                      key={book.id}
+                      onClick={(e) => {
+                        if ((e.target as HTMLElement).closest('button')) return;
+                        openBookEditWorkspace();
+                      }}
+                      className="group cursor-pointer bg-white border border-slate-200 rounded-2xl overflow-hidden flex flex-col justify-between hover:border-blue-400 hover:shadow-sm transition-all"
+                    >
                       <button
                         type="button"
-                        onClick={() => setSelectedBookId(book.id)}
-                        className="min-h-[40px] text-xs font-semibold text-blue-600 hover:text-blue-700 inline-flex items-center gap-1 tabular-nums whitespace-nowrap"
+                        onClick={openBookEditWorkspace}
+                        className="text-left w-full flex-1 flex flex-col focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600"
                       >
-                        Open ({book.chapterCount} chapters)
-                        <ChevronRight className="w-4 h-4" />
+                        <BookCoverGraphic
+                          subject={book.subject}
+                          title={book.title}
+                          topLabel={book.board}
+                        />
+
+                        <div className="p-3 sm:p-3.5 w-full flex-1 flex flex-col justify-between">
+                          <div>
+                            <h2 className="font-display text-sm sm:text-[15px] font-semibold text-slate-900 group-hover:text-blue-700 transition-colors leading-snug line-clamp-2">
+                              {book.title}
+                            </h2>
+                            <p className="mt-1.5 text-xs text-slate-600 truncate">
+                              {book.grade}
+                              <span aria-hidden="true" className="mx-1 text-slate-300">
+                                ·
+                              </span>
+                              {book.subject}
+                            </p>
+                          </div>
+
+                          <p className="mt-2 text-[11px] text-slate-400 tabular-nums truncate">
+                            {book.chapterCount} {book.chapterCount === 1 ? 'ch' : 'chs'}
+                            <span aria-hidden="true" className="mx-1 text-slate-300">
+                              ·
+                            </span>
+                            {formatEditedLabel(book.updatedAt, book.createdAt)}
+                          </p>
+                        </div>
                       </button>
 
-                      <div className="flex items-center gap-1">
+                      <div className="px-2.5 sm:px-3 py-1 border-t border-slate-100 flex items-center justify-between gap-1">
                         <button
                           type="button"
-                          onClick={() => {
-                            setEditingBook(book);
-                            setShowBookModal(true);
-                          }}
-                          aria-label={`Edit ${book.title}`}
-                          className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100"
+                          onClick={openBookEditWorkspace}
+                          className="min-h-[40px] px-1 text-xs font-semibold text-blue-600 group-hover:text-blue-700 inline-flex items-center gap-0.5 whitespace-nowrap"
                         >
-                          <Edit3 className="w-4 h-4" />
+                          Edit
+                          <ChevronRight className="w-3.5 h-3.5 shrink-0" />
                         </button>
 
-                        {confirmDeleteBookId === book.id ? (
-                          <div className="flex items-center gap-1">
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                await deleteBookWithContents(book.id);
-                                setConfirmDeleteBookId(null);
-                              }}
-                              className="min-h-[36px] px-2.5 py-1 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg"
-                            >
-                              Delete
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setConfirmDeleteBookId(null)}
-                              className="min-h-[36px] px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg"
-                            >
-                              No
-                            </button>
-                          </div>
-                        ) : (
+                        <div className="flex items-center shrink-0">
                           <button
                             type="button"
-                            onClick={() => setConfirmDeleteBookId(book.id)}
-                            aria-label={`Delete ${book.title}`}
-                            className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl text-slate-400 hover:text-red-600 hover:bg-red-50"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingBook(book);
+                              setShowBookModal(true);
+                            }}
+                            aria-label={`Edit details for ${book.title}`}
+                            title="Edit book details"
+                            className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
                           >
-                            <Trash2 className="w-4 h-4" />
+                            <Edit3 className="w-3.5 h-3.5" />
                           </button>
-                        )}
+
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDeleteTarget({
+                                itemName: book.title,
+                                description: 'and all of its chapters and scanned pages',
+                                onConfirm: () => deleteBookWithContents(book.id),
+                              });
+                            }}
+                            aria-label={`Delete ${book.title}`}
+                            title="Delete book"
+                            className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  </article>
-                ))}
+                    </article>
+                  );
+                })}
               </div>
             )}
 
@@ -1074,6 +1125,11 @@ export const AdminScannerApp: React.FC = () => {
           }}
         />
       )}
+
+      <ConfirmDeleteDialog
+        target={deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+      />
     </div>
   );
 };
