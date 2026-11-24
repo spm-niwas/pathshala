@@ -1,0 +1,6 @@
+{
+  "name": "Paathshala Studio",
+  "description": "Mobile-first Class 3 CBSE textbook scanner and study studio for English, Hindi, Maths, and EVS.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
