@@ -99,7 +99,18 @@ export const BookFormModal: React.FC<BookFormModalProps> = ({
       await onSave({ title, subject, language, board, grade });
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save book.');
+      let msg = err instanceof Error ? err.message : 'Failed to save book.';
+      try {
+        const parsed = JSON.parse(msg);
+        if (parsed && typeof parsed.error === 'string') {
+          msg = parsed.error.includes('permissions')
+            ? 'You do not have permission to save books with this account. Please sign in with director@spmniwas.in.'
+            : parsed.error;
+        }
+      } catch {
+        // Plain error message
+      }
+      setError(msg);
     } finally {
       setSaving(false);
     }

@@ -20,7 +20,8 @@ import {
   Settings,
   Trash2,
 } from 'lucide-react';
-import { auth, googleProvider, testConnection } from '../lib/firebase';
+import { doc, getDoc } from 'firebase/firestore';
+import { auth, db, googleProvider, testConnection } from '../lib/firebase';
 import {
   createBook,
   createChapter,
@@ -56,6 +57,7 @@ type ActiveSection = 'bookshelf' | 'masters' | 'parents';
 export const AdminScannerApp: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
+  const [adminStatus, setAdminStatus] = useState<'none' | 'checking' | 'authorized' | 'unauthorized'>('none');
   const [authError, setAuthError] = useState<string | null>(null);
 
   const [activeSection, setActiveSection] = useState<ActiveSection>('bookshelf');
@@ -133,6 +135,41 @@ export const AdminScannerApp: React.FC = () => {
 
   useEffect(() => {
     if (!authReady || !user) {
+      setAdminStatus('none');
+      return;
+    }
+
+    let cancelled = false;
+    const normalizedEmail = (user.email || '').toLowerCase();
+
+    if (normalizedEmail === 'director@spmniwas.in' && user.emailVerified) {
+      setAdminStatus('authorized');
+      return;
+    }
+
+    if (!user.emailVerified) {
+      setAdminStatus('unauthorized');
+      return;
+    }
+
+    setAdminStatus('checking');
+    getDoc(doc(db, 'admins', user.uid))
+      .then((snap) => {
+        if (cancelled) return;
+        setAdminStatus(snap.exists() ? 'authorized' : 'unauthorized');
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setAdminStatus('unauthorized');
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authReady, user]);
+
+  useEffect(() => {
+    if (!authReady || !user || adminStatus !== 'authorized') {
       setBooks([]);
       setBoards([]);
       setClasses([]);
@@ -174,10 +211,10 @@ export const AdminScannerApp: React.FC = () => {
       unsubSubjects();
       unsubParents();
     };
-  }, [authReady, user]);
+  }, [authReady, user, adminStatus]);
 
   useEffect(() => {
-    if (!authReady || !user || !selectedBookId) {
+    if (!authReady || !user || adminStatus !== 'authorized' || !selectedBookId) {
       setChapters([]);
       setChaptersLoading(false);
       return;
@@ -189,7 +226,7 @@ export const AdminScannerApp: React.FC = () => {
       setChaptersLoading(false);
     });
     return () => unsub();
-  }, [authReady, user, selectedBookId]);
+  }, [authReady, user, adminStatus, selectedBookId]);
 
   const selectedBook = useMemo(
     () => books.find((b) => b.id === selectedBookId) ?? null,
@@ -247,6 +284,15 @@ export const AdminScannerApp: React.FC = () => {
     setSelectedChapterId(null);
     setActiveSection('bookshelf');
     await signOut(auth);
+  };
+
+  const handleSwitchAccount = async () => {
+    setAuthError(null);
+    setShowAccountMenu(false);
+    setSelectedBookId(null);
+    setSelectedChapterId(null);
+    await signOut(auth);
+    await handleSignIn();
   };
 
   const goToBookshelf = () => {
@@ -309,7 +355,7 @@ export const AdminScannerApp: React.FC = () => {
             Paathshala Studio
           </a>
 
-          {user && (
+          {user && adminStatus === 'authorized' && (
             <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600">
               <button
                 type="button"
@@ -420,7 +466,7 @@ export const AdminScannerApp: React.FC = () => {
 
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-5 sm:py-8">
         {/* Mobile Section Switcher (visible < md when not inside a chapter scanner) */}
-        {authReady && user && !selectedChapter && (
+        {authReady && user && adminStatus === 'authorized' && !selectedChapter && (
           <div className="md:hidden grid grid-cols-3 gap-1 p-1 bg-slate-200/75 rounded-xl mb-5">
             <button
               type="button"
@@ -488,6 +534,46 @@ export const AdminScannerApp: React.FC = () => {
             >
               Sign in with Google
             </button>
+          </section>
+        ) : adminStatus === 'checking' ? (
+          <div className="flex items-center justify-center py-24 text-sm text-slate-500 gap-2">
+            <Loader2 className="w-4 h-4 animate-spin" />
+            Checking account permissions...
+          </div>
+        ) : adminStatus === 'unauthorized' ? (
+          <section className="max-w-lg mx-auto bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 mt-4 sm:mt-10">
+            <p className="text-xs font-medium text-amber-700 mb-2">
+              Admin Access Required
+            </p>
+            <h1 className="font-display text-xl sm:text-2xl font-bold text-slate-900 tracking-tight mb-2 text-balance">
+              Signed in as {user.email}
+            </h1>
+            <p className="text-sm text-slate-600 leading-relaxed mb-6">
+              This account does not have Admin access to manage books or scan chapters. Sign out and choose <strong>director@spmniwas.in</strong> (tap <strong>Use another account</strong> on Google&apos;s screen if it isn&apos;t listed yet).
+            </p>
+
+            {authError && (
+              <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl px-3.5 py-2.5 mb-4">
+                {authError}
+              </p>
+            )}
+
+            <div className="flex flex-col sm:flex-row gap-3">
+              <button
+                type="button"
+                onClick={handleSwitchAccount}
+                className="flex-1 min-h-[48px] px-5 py-3 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-xl transition-colors whitespace-nowrap"
+              >
+                Switch Google Account
+              </button>
+              <button
+                type="button"
+                onClick={handleSignOut}
+                className="min-h-[48px] px-5 py-3 bg-slate-100 hover:bg-slate-200 text-slate-800 text-sm font-medium rounded-xl transition-colors whitespace-nowrap"
+              >
+                Sign Out
+              </button>
+            </div>
           </section>
         ) : activeSection === 'masters' ? (
           <MastersPage

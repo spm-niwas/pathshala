@@ -1,5 +1,7 @@
 import React, { Component, type ErrorInfo, type ReactNode } from 'react';
-import { AlertTriangle, RefreshCw } from 'lucide-react';
+import { AlertTriangle, LogOut, RefreshCw } from 'lucide-react';
+import { signOut } from 'firebase/auth';
+import { auth } from '../lib/firebase';
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -46,6 +48,14 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     console.error('App ErrorBoundary caught:', error, errorInfo);
   }
 
+  handleSignOutAndReload = async () => {
+    try {
+      await signOut(auth);
+    } finally {
+      window.location.reload();
+    }
+  };
+
   render() {
     if (this.state.hasError) {
       return (
@@ -65,14 +75,24 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
                 {this.state.details}
               </p>
             )}
-            <button
-              type="button"
-              onClick={() => window.location.reload()}
-              className="w-full min-h-[44px] px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-xl hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 whitespace-nowrap"
-            >
-              <RefreshCw className="w-4 h-4" />
-              Reload App
-            </button>
+            <div className="flex flex-col sm:flex-row gap-2.5">
+              <button
+                type="button"
+                onClick={this.handleSignOutAndReload}
+                className="flex-1 min-h-[44px] px-4 py-2.5 bg-slate-100 text-slate-800 text-sm font-medium rounded-xl hover:bg-slate-200 transition-colors flex items-center justify-center gap-2 whitespace-nowrap"
+              >
+                <LogOut className="w-4 h-4 shrink-0" />
+                Switch Account
+              </button>
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="flex-1 min-h-[44px] px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-xl hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 whitespace-nowrap"
+              >
+                <RefreshCw className="w-4 h-4 shrink-0" />
+                Reload App
+              </button>
+            </div>
           </div>
         </div>
       );
