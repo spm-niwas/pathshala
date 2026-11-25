@@ -32,12 +32,14 @@ function clampString(value: string, maxLength: number): string {
 export function subscribeToBoards(
   userId: string,
   userEmail: string | null | undefined,
-  onData: (boards: MasterBoard[]) => void
+  onData: (boards: MasterBoard[]) => void,
+  readSharedCatalog = false
 ): Unsubscribe {
   const path = 'boards';
   const ref = collection(db, path);
+  const isBootstrapped = (userEmail || '').trim().toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL;
   const q =
-    userEmail === BOOTSTRAPPED_ADMIN_EMAIL
+    isBootstrapped || readSharedCatalog
       ? query(ref, orderBy('name', 'asc'))
       : query(ref, where('ownerId', '==', userId));
 
@@ -56,12 +58,14 @@ export function subscribeToBoards(
 export function subscribeToClasses(
   userId: string,
   userEmail: string | null | undefined,
-  onData: (classes: MasterClass[]) => void
+  onData: (classes: MasterClass[]) => void,
+  readSharedCatalog = false
 ): Unsubscribe {
   const path = 'classes';
   const ref = collection(db, path);
+  const isBootstrapped = (userEmail || '').trim().toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL;
   const q =
-    userEmail === BOOTSTRAPPED_ADMIN_EMAIL
+    isBootstrapped || readSharedCatalog
       ? query(ref, orderBy('name', 'asc'))
       : query(ref, where('ownerId', '==', userId));
 
@@ -80,12 +84,14 @@ export function subscribeToClasses(
 export function subscribeToSubjects(
   userId: string,
   userEmail: string | null | undefined,
-  onData: (subjects: MasterSubject[]) => void
+  onData: (subjects: MasterSubject[]) => void,
+  readSharedCatalog = false
 ): Unsubscribe {
   const path = 'subjects';
   const ref = collection(db, path);
+  const isBootstrapped = (userEmail || '').trim().toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL;
   const q =
-    userEmail === BOOTSTRAPPED_ADMIN_EMAIL
+    isBootstrapped || readSharedCatalog
       ? query(ref, orderBy('name', 'asc'))
       : query(ref, where('ownerId', '==', userId));
 

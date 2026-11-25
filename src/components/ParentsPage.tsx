@@ -147,7 +147,8 @@ export const ParentsPage: React.FC<ParentsPageProps> = ({
     setSubmitting(true);
     setErrorMsg(null);
     try {
-      await updateParent(parentId, formattedName, normalizedEmail);
+      const existingParent = parents.find((p) => p.id === parentId);
+      await updateParent(parentId, formattedName, normalizedEmail, existingParent?.email);
       setEditingId(null);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Failed to update parent.');
@@ -364,7 +365,7 @@ export const ParentsPage: React.FC<ParentsPageProps> = ({
                               setDeleteTarget({
                                 itemName: parent.name,
                                 description: `(${parent.email}) from Parents`,
-                                onConfirm: () => deleteParent(parent.id),
+                                onConfirm: () => deleteParent(parent.id, parent.email),
                               })
                             }
                             aria-label={`Delete ${parent.name}`}

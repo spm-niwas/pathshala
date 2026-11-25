@@ -10,6 +10,10 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isValidAccessId(id) {
+      return id is string && id.size() >= 10 && id.size() <= 320 && id.matches('^[a-z0-9_\\-]+$');
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -35,6 +39,21 @@ service cloud.firestore {
         isVerifiedUser() &&
         exists(/databases/$(database)/documents/admins/$(request.auth.uid))
       );
+    }
+
+    function emailToId(email) {
+      return email.lower()
+        .replace('_', '_u_')
+        .replace('@', '_at_')
+        .replace('\\.', '_dot_')
+        .replace('\\+', '_plus_')
+        .replace('%', '_pct_');
+    }
+
+    function isRegisteredParent() {
+      return isVerifiedUser() &&
+        request.auth.token.email is string &&
+        exists(/databases/$(database)/documents/parentAccess/$(emailToId(request.auth.token.email)));
     }
 
     function isValidAdminUser(data) {
@@ -76,15 +95,61 @@ service cloud.firestore {
         data.updatedAt is timestamp;
     }
 
+    function isValidParentAccess(data, accessId) {
+      return data.keys().hasAll(['parentId', 'name', 'email', 'ownerId', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['parentId', 'name', 'email', 'ownerId', 'createdAt', 'updatedAt']) &&
+        isValidId(data.parentId) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        data.email is string && data.email.size() >= 11 && data.email.size() <= 160 &&
+        data.email.matches('^[a-z0-9._%+\\-]+@gmail\\.com$') &&
+        emailToId(data.email) == accessId &&
+        isValidId(data.ownerId) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidChild(data) {
+      return data.keys().hasAll(['name', 'board', 'grade', 'avatarColor', 'loginCodeHash', 'loginCodeSalt', 'parentEmail', 'ownerId', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['name', 'board', 'grade', 'avatarColor', 'loginCodeHash', 'loginCodeSalt', 'parentEmail', 'ownerId', 'createdAt', 'updatedAt']) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+        data.board is string && data.board.size() >= 1 && data.board.size() <= 40 &&
+        data.grade is string && data.grade.size() >= 1 && data.grade.size() <= 40 &&
+        data.avatarColor in ['blue', 'emerald', 'amber', 'rose', 'indigo', 'teal'] &&
+        data.loginCodeHash is string && data.loginCodeHash.size() == 64 &&
+        data.loginCodeHash.matches('^[a-f0-9]{64}$') &&
+        data.loginCodeSalt is string && data.loginCodeSalt.size() >= 16 && data.loginCodeSalt.size() <= 64 &&
+        data.loginCodeSalt.matches('^[a-f0-9]+$') &&
+        data.parentEmail is string && data.parentEmail.size() >= 3 && data.parentEmail.size() <= 200 &&
+        isValidId(data.ownerId) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidParentSettings(data) {
+      return data.keys().hasAll(['ownerId', 'parentEmail', 'passpinHash', 'passpinSalt', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['ownerId', 'parentEmail', 'passpinHash', 'passpinSalt', 'createdAt', 'updatedAt']) &&
+        isValidId(data.ownerId) &&
+        data.parentEmail is string && data.parentEmail.size() >= 3 && data.parentEmail.size() <= 200 &&
+        data.passpinHash is string && data.passpinHash.size() == 64 &&
+        data.passpinHash.matches('^[a-f0-9]{64}$') &&
+        data.passpinSalt is string && data.passpinSalt.size() >= 16 && data.passpinSalt.size() <= 64 &&
+        data.passpinSalt.matches('^[a-f0-9]+$') &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
     function isValidBook(data) {
       return data.keys().hasAll(['title', 'subject', 'language', 'board', 'grade', 'chapterCount', 'ownerId', 'createdAt', 'updatedAt']) &&
-        data.keys().hasOnly(['title', 'subject', 'language', 'board', 'grade', 'chapterCount', 'ownerId', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['title', 'subject', 'language', 'board', 'grade', 'chapterCount', 'publishStatus', 'hasUnpublishedChanges', 'publishedAt', 'ownerId', 'createdAt', 'updatedAt']) &&
         data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
         data.subject is string && data.subject.size() >= 1 && data.subject.size() <= 60 &&
         data.language in ['en', 'hi'] &&
         data.board is string && data.board.size() >= 1 && data.board.size() <= 40 &&
         data.grade is string && data.grade.size() >= 1 && data.grade.size() <= 40 &&
         data.chapterCount is int && data.chapterCount >= 0 && data.chapterCount <= 500 &&
+        (!('publishStatus' in data) || data.publishStatus in ['draft', 'published']) &&
+        (!('hasUnpublishedChanges' in data) || data.hasUnpublishedChanges is bool) &&
+        (!('publishedAt' in data) || data.publishedAt is timestamp) &&
         isValidId(data.ownerId) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
@@ -136,50 +201,77 @@ service cloud.firestore {
     }
 
     match /boards/{boardId} {
-      allow get: if isValidId(boardId) && isVerifiedUser() && (existing().ownerId == request.auth.uid || isAdmin());
-      allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isBootstrappedAdmin());
+      allow get: if isValidId(boardId) && isVerifiedUser() && (existing().ownerId == request.auth.uid || isAdmin() || isRegisteredParent());
+      allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isBootstrappedAdmin() || isRegisteredParent());
       allow create: if isValidId(boardId) && isVerifiedUser() && isValidNamedMaster(incoming()) && incoming().ownerId == request.auth.uid && incoming().createdAt == request.time && incoming().updatedAt == request.time && isAdmin();
       allow update: if isValidId(boardId) && isVerifiedUser() && isValidNamedMaster(incoming()) && isAdmin() && incoming().ownerId == existing().ownerId && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'updatedAt']);
       allow delete: if isValidId(boardId) && isVerifiedUser() && isAdmin();
     }
 
     match /classes/{classId} {
-      allow get: if isValidId(classId) && isVerifiedUser() && (existing().ownerId == request.auth.uid || isAdmin());
-      allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isBootstrappedAdmin());
+      allow get: if isValidId(classId) && isVerifiedUser() && (existing().ownerId == request.auth.uid || isAdmin() || isRegisteredParent());
+      allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isBootstrappedAdmin() || isRegisteredParent());
       allow create: if isValidId(classId) && isVerifiedUser() && isValidNamedMaster(incoming()) && incoming().ownerId == request.auth.uid && incoming().createdAt == request.time && incoming().updatedAt == request.time && isAdmin();
       allow update: if isValidId(classId) && isVerifiedUser() && isValidNamedMaster(incoming()) && isAdmin() && incoming().ownerId == existing().ownerId && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'updatedAt']);
       allow delete: if isValidId(classId) && isVerifiedUser() && isAdmin();
     }
 
     match /subjects/{subjectId} {
-      allow get: if isValidId(subjectId) && isVerifiedUser() && (existing().ownerId == request.auth.uid || isAdmin());
-      allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isBootstrappedAdmin());
+      allow get: if isValidId(subjectId) && isVerifiedUser() && (existing().ownerId == request.auth.uid || isAdmin() || isRegisteredParent());
+      allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isBootstrappedAdmin() || isRegisteredParent());
       allow create: if isValidId(subjectId) && isVerifiedUser() && isValidMasterSubject(incoming()) && incoming().ownerId == request.auth.uid && incoming().createdAt == request.time && incoming().updatedAt == request.time && isAdmin();
       allow update: if isValidId(subjectId) && isVerifiedUser() && isValidMasterSubject(incoming()) && isAdmin() && incoming().ownerId == existing().ownerId && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'defaultLanguage', 'updatedAt']);
       allow delete: if isValidId(subjectId) && isVerifiedUser() && isAdmin();
     }
 
     match /parents/{parentId} {
-      allow get: if isValidId(parentId) && isVerifiedUser() && (existing().ownerId == request.auth.uid || isAdmin());
-      allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isBootstrappedAdmin());
+      allow get: if isValidId(parentId) && isVerifiedUser() && (existing().ownerId == request.auth.uid || isAdmin() || existing().email == request.auth.token.email);
+      allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isBootstrappedAdmin() || resource.data.email == request.auth.token.email);
       allow create: if isValidId(parentId) && isVerifiedUser() && isValidParent(incoming()) && incoming().ownerId == request.auth.uid && incoming().createdAt == request.time && incoming().updatedAt == request.time && isAdmin();
       allow update: if isValidId(parentId) && isVerifiedUser() && isValidParent(incoming()) && isAdmin() && incoming().ownerId == existing().ownerId && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email', 'updatedAt']);
       allow delete: if isValidId(parentId) && isVerifiedUser() && isAdmin();
     }
 
+    match /parentAccess/{accessId} {
+      allow get: if isValidAccessId(accessId) && isVerifiedUser() && (isAdmin() || accessId == emailToId(request.auth.token.email));
+      allow list: if isBootstrappedAdmin();
+      allow create: if isValidAccessId(accessId) && isVerifiedUser() && isValidParentAccess(incoming(), accessId) && incoming().ownerId == request.auth.uid && incoming().createdAt == request.time && incoming().updatedAt == request.time && isAdmin();
+      allow update: if isValidAccessId(accessId) && isVerifiedUser() && isValidParentAccess(incoming(), accessId) && isAdmin() && incoming().ownerId == existing().ownerId && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && incoming().diff(existing()).affectedKeys().hasOnly(['parentId', 'name', 'email', 'updatedAt']);
+      allow delete: if isValidAccessId(accessId) && isVerifiedUser() && isAdmin();
+    }
+
+    match /parentSettings/{userId} {
+      allow get: if isValidId(userId) && isVerifiedUser() && (request.auth.uid == userId || isAdmin());
+      allow list: if isBootstrappedAdmin();
+      allow create: if isValidId(userId) && isVerifiedUser() && isValidParentSettings(incoming()) && (isAdmin() || isRegisteredParent()) && userId == request.auth.uid && incoming().ownerId == request.auth.uid && incoming().parentEmail == request.auth.token.email.lower() && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId) && isVerifiedUser() && isValidParentSettings(incoming()) && (isAdmin() || (userId == request.auth.uid && existing().ownerId == request.auth.uid && existing().parentEmail == request.auth.token.email.lower())) && incoming().ownerId == existing().ownerId && incoming().parentEmail == existing().parentEmail && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && incoming().diff(existing()).affectedKeys().hasOnly(['passpinHash', 'passpinSalt', 'updatedAt']);
+      allow delete: if isValidId(userId) && isVerifiedUser() && (isAdmin() || (userId == request.auth.uid && existing().ownerId == request.auth.uid));
+    }
+
+    match /children/{childId} {
+      allow get: if isValidId(childId) && isVerifiedUser() && (isAdmin() || (existing().ownerId == request.auth.uid && existing().parentEmail == request.auth.token.email));
+      allow list: if isVerifiedUser() && (resource.data.parentEmail == request.auth.token.email || isBootstrappedAdmin());
+      allow create: if isValidId(childId) && isVerifiedUser() && isValidChild(incoming()) && (isAdmin() || isRegisteredParent()) && incoming().ownerId == request.auth.uid && incoming().parentEmail == request.auth.token.email && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(childId) && isVerifiedUser() && isValidChild(incoming()) && (isAdmin() || (existing().ownerId == request.auth.uid && existing().parentEmail == request.auth.token.email)) && incoming().ownerId == existing().ownerId && incoming().parentEmail == existing().parentEmail && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'board', 'grade', 'avatarColor', 'loginCodeHash', 'loginCodeSalt', 'updatedAt']);
+      allow delete: if isValidId(childId) && isVerifiedUser() && (isAdmin() || (existing().ownerId == request.auth.uid && existing().parentEmail == request.auth.token.email));
+    }
+
     match /books/{bookId} {
-      allow get: if isValidId(bookId) && isVerifiedUser() && (existing().ownerId == request.auth.uid || isAdmin());
-      allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isBootstrappedAdmin());
-      allow create: if isValidId(bookId) && isVerifiedUser() && isValidBook(incoming()) && incoming().ownerId == request.auth.uid && incoming().createdAt == request.time && incoming().updatedAt == request.time && isAdmin();
+      allow get: if isValidId(bookId) && isVerifiedUser() && (existing().ownerId == request.auth.uid || isAdmin() || (isRegisteredParent() && existing().publishStatus == 'published'));
+      allow list: if isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isBootstrappedAdmin() || (isRegisteredParent() && resource.data.publishStatus == 'published'));
+      allow create: if isValidId(bookId) && isVerifiedUser() && isValidBook(incoming()) && incoming().ownerId == request.auth.uid && incoming().publishStatus == 'draft' && incoming().hasUnpublishedChanges == false && !('publishedAt' in incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time && isAdmin();
       allow update: if isValidId(bookId) && isVerifiedUser() && isValidBook(incoming()) && isAdmin() && incoming().ownerId == existing().ownerId && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && (
-        incoming().diff(existing()).affectedKeys().hasOnly(['title', 'subject', 'language', 'board', 'grade', 'updatedAt']) ||
-        incoming().diff(existing()).affectedKeys().hasOnly(['chapterCount', 'updatedAt'])
+        incoming().diff(existing()).affectedKeys().hasOnly(['title', 'subject', 'language', 'board', 'grade', 'hasUnpublishedChanges', 'updatedAt']) ||
+        incoming().diff(existing()).affectedKeys().hasOnly(['chapterCount', 'hasUnpublishedChanges', 'updatedAt']) ||
+        incoming().diff(existing()).affectedKeys().hasOnly(['hasUnpublishedChanges', 'updatedAt']) ||
+        (incoming().publishStatus == 'published' && incoming().hasUnpublishedChanges == false && incoming().publishedAt == request.time && incoming().diff(existing()).affectedKeys().hasOnly(['publishStatus', 'hasUnpublishedChanges', 'publishedAt', 'updatedAt'])) ||
+        (incoming().publishStatus == 'draft' && incoming().hasUnpublishedChanges == false && incoming().diff(existing()).affectedKeys().hasOnly(['publishStatus', 'hasUnpublishedChanges', 'updatedAt']))
       );
       allow delete: if isValidId(bookId) && isVerifiedUser() && isAdmin();
 
       match /chapters/{chapterId} {
-        allow get: if isValidId(bookId) && isValidId(chapterId) && isVerifiedUser() && (existing().ownerId == request.auth.uid || isAdmin());
-        allow list: if isValidId(bookId) && isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isBootstrappedAdmin());
+        allow get: if isValidId(bookId) && isValidId(chapterId) && isVerifiedUser() && (existing().ownerId == request.auth.uid || isAdmin() || (isRegisteredParent() && get(/databases/$(database)/documents/books/$(bookId)).data.publishStatus == 'published'));
+        allow list: if isValidId(bookId) && isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isBootstrappedAdmin() || isRegisteredParent());
         allow create: if isValidId(bookId) && isValidId(chapterId) && isVerifiedUser() && isValidChapter(incoming(), bookId) && incoming().ownerId == request.auth.uid && incoming().createdAt == request.time && incoming().updatedAt == request.time && exists(/databases/$(database)/documents/books/$(bookId)) && isAdmin();
         allow update: if isValidId(bookId) && isValidId(chapterId) && isVerifiedUser() && isValidChapter(incoming(), bookId) && isAdmin() && incoming().bookId == existing().bookId && incoming().ownerId == existing().ownerId && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && (
           incoming().diff(existing()).affectedKeys().hasOnly(['chapterNumber', 'title', 'combinedText', 'pageCount', 'savedImageCount', 'status', 'updatedAt']) ||
@@ -189,8 +281,8 @@ service cloud.firestore {
         allow delete: if isValidId(bookId) && isValidId(chapterId) && isVerifiedUser() && isAdmin();
 
         match /pages/{pageId} {
-          allow get: if isValidId(bookId) && isValidId(chapterId) && isValidId(pageId) && isVerifiedUser() && (existing().ownerId == request.auth.uid || isAdmin());
-          allow list: if isValidId(bookId) && isValidId(chapterId) && isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isBootstrappedAdmin());
+          allow get: if isValidId(bookId) && isValidId(chapterId) && isValidId(pageId) && isVerifiedUser() && (existing().ownerId == request.auth.uid || isAdmin() || (isRegisteredParent() && get(/databases/$(database)/documents/books/$(bookId)).data.publishStatus == 'published'));
+          allow list: if isValidId(bookId) && isValidId(chapterId) && isVerifiedUser() && (resource.data.ownerId == request.auth.uid || isBootstrappedAdmin() || isRegisteredParent());
           allow create: if isValidId(bookId) && isValidId(chapterId) && isValidId(pageId) && isVerifiedUser() && isValidScannedPage(incoming(), bookId, chapterId) && incoming().ownerId == request.auth.uid && incoming().createdAt == request.time && exists(/databases/$(database)/documents/books/$(bookId)/chapters/$(chapterId)) && isAdmin();
           allow update: if isValidId(bookId) && isValidId(chapterId) && isValidId(pageId) && isVerifiedUser() && isValidScannedPage(incoming(), bookId, chapterId) && isAdmin() && incoming().bookId == existing().bookId && incoming().chapterId == existing().chapterId && incoming().ownerId == existing().ownerId && incoming().createdAt == existing().createdAt && incoming().diff(existing()).affectedKeys().hasOnly(['pageNumber', 'hasDiagram', 'diagramNote', 'keepImage', 'imageDataUrl']);
           allow delete: if isValidId(bookId) && isValidId(chapterId) && isValidId(pageId) && isVerifiedUser() && isAdmin();

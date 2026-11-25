@@ -1,6 +1,7 @@
 export type Subject = string;
 export type BookLanguage = 'en' | 'hi';
 export type ChapterStatus = 'draft' | 'ready';
+export type BookPublishStatus = 'draft' | 'published';
 
 export const DEFAULT_BOARDS = ['CBSE'];
 export const DEFAULT_CLASSES = ['Class 3'];
@@ -79,6 +80,53 @@ export interface ParentAccount {
   updatedAt?: unknown;
 }
 
+export type ChildAvatarColor = 'blue' | 'emerald' | 'amber' | 'rose' | 'indigo' | 'teal';
+
+export const CHILD_AVATAR_COLORS: Array<{
+  id: ChildAvatarColor;
+  label: string;
+  bgClass: string;
+  softBgClass: string;
+  textClass: string;
+}> = [
+  { id: 'blue', label: 'Blue', bgClass: 'bg-blue-600', softBgClass: 'bg-blue-50', textClass: 'text-blue-700' },
+  { id: 'emerald', label: 'Emerald', bgClass: 'bg-emerald-600', softBgClass: 'bg-emerald-50', textClass: 'text-emerald-700' },
+  { id: 'amber', label: 'Amber', bgClass: 'bg-amber-600', softBgClass: 'bg-amber-50', textClass: 'text-amber-700' },
+  { id: 'rose', label: 'Rose', bgClass: 'bg-rose-600', softBgClass: 'bg-rose-50', textClass: 'text-rose-700' },
+  { id: 'indigo', label: 'Indigo', bgClass: 'bg-indigo-600', softBgClass: 'bg-indigo-50', textClass: 'text-indigo-700' },
+  { id: 'teal', label: 'Teal', bgClass: 'bg-teal-600', softBgClass: 'bg-teal-50', textClass: 'text-teal-700' },
+];
+
+export const CHILD_LIMITS = {
+  nameMax: 80,
+  boardMax: 40,
+  gradeMax: 40,
+  codeLength: 4,
+} as const;
+
+export interface ChildProfile {
+  id: string;
+  name: string;
+  board: string;
+  grade: string;
+  avatarColor: ChildAvatarColor;
+  loginCodeHash: string;
+  loginCodeSalt: string;
+  parentEmail: string;
+  ownerId: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface ParentSettings {
+  ownerId: string;
+  parentEmail: string;
+  passpinHash: string;
+  passpinSalt: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
 export interface Book {
   id: string;
   title: string;
@@ -87,6 +135,9 @@ export interface Book {
   board: string;
   grade: string;
   chapterCount: number;
+  publishStatus?: BookPublishStatus;
+  hasUnpublishedChanges?: boolean;
+  publishedAt?: unknown;
   ownerId: string;
   createdAt?: unknown;
   updatedAt?: unknown;

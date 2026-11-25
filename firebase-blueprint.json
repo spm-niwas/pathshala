@@ -168,6 +168,20 @@
           "type": "integer",
           "description": "Total number of chapters saved in this book."
         },
+        "publishStatus": {
+          "type": "string",
+          "enum": ["draft", "published"],
+          "description": "Whether the book is a draft (Admin only) or published to parents and children."
+        },
+        "hasUnpublishedChanges": {
+          "type": "boolean",
+          "description": "Indicates edits were made after the last publish and Republish is available."
+        },
+        "publishedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the book was last published or republished."
+        },
         "ownerId": {
           "type": "string",
           "minLength": 1,
@@ -344,6 +358,164 @@
         }
       },
       "required": ["name", "email", "ownerId", "createdAt", "updatedAt"]
+    },
+    "ParentAccess": {
+      "title": "ParentAccess",
+      "description": "Deterministic email-keyed parent authorization lookup enabling security rules to verify registered parents.",
+      "type": "object",
+      "properties": {
+        "parentId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Corresponding document ID in /parents."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Parent display name."
+        },
+        "email": {
+          "type": "string",
+          "minLength": 11,
+          "maxLength": 160,
+          "pattern": "^[a-z0-9._%+\\-]+@gmail\\.com$",
+          "description": "Normalized lowercase Gmail address."
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "UID of the admin who granted access."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when access was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when access was last updated."
+        }
+      },
+      "required": ["parentId", "name", "email", "ownerId", "createdAt", "updatedAt"]
+    },
+    "ChildProfile": {
+      "title": "ChildProfile",
+      "description": "A child learner profile created by a parent, with Board, Class, avatar color, and salted 4-digit login code hash.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Child's name."
+        },
+        "board": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "description": "Curriculum board (e.g., CBSE)."
+        },
+        "grade": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "description": "Class/grade level (e.g., Class 3)."
+        },
+        "avatarColor": {
+          "type": "string",
+          "enum": ["blue", "emerald", "amber", "rose", "indigo", "teal"],
+          "description": "Color theme for the child's profile card."
+        },
+        "loginCodeHash": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "Salted SHA-256 hash of the child's 4-digit login code."
+        },
+        "loginCodeSalt": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]+$",
+          "description": "Hex salt for the child's 4-digit login code hash."
+        },
+        "parentEmail": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 200,
+          "description": "Normalized email of the parent who manages this child."
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the parent who created this profile."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the child profile was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the child profile was last updated."
+        }
+      },
+      "required": ["name", "board", "grade", "avatarColor", "loginCodeHash", "loginCodeSalt", "parentEmail", "ownerId", "createdAt", "updatedAt"]
+    },
+    "ParentSettings": {
+      "title": "ParentSettings",
+      "description": "Stores a parent's salted SHA-256 4-digit passpin used to unlock Parent Mode and any child profile on a shared device.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the parent."
+        },
+        "parentEmail": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 200,
+          "description": "Normalized lowercase email of the parent."
+        },
+        "passpinHash": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "Salted SHA-256 hash of the parent's 4-digit passpin."
+        },
+        "passpinSalt": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]+$",
+          "description": "Hex salt for the parent's 4-digit passpin hash."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when passpin settings were created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when passpin settings were last updated."
+        }
+      },
+      "required": ["ownerId", "parentEmail", "passpinHash", "passpinSalt", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -378,6 +550,18 @@
     "/parents/{parentId}": {
       "schema": { "$ref": "#/entities/Parent" },
       "description": "Registered parent accounts with Gmail-only validation."
+    },
+    "/parentAccess/{accessId}": {
+      "schema": { "$ref": "#/entities/ParentAccess" },
+      "description": "Deterministic email-keyed parent authorization lookup records."
+    },
+    "/children/{childId}": {
+      "schema": { "$ref": "#/entities/ChildProfile" },
+      "description": "Child profiles managed by parents with Board, Class, and hashed 4-digit login code."
+    },
+    "/parentSettings/{userId}": {
+      "schema": { "$ref": "#/entities/ParentSettings" },
+      "description": "Parent passpin settings keyed by Firebase Auth UID."
     }
   }
 }

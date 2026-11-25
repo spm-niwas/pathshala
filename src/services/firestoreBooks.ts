@@ -60,14 +60,20 @@ export function sortBooksByLatestEdited(items: Book[]): Book[] {
 export function subscribeToBooks(
   userId: string,
   userEmail: string | null | undefined,
-  onData: (books: Book[]) => void
+  onData: (books: Book[]) => void,
+  readSharedCatalog = false,
+  publishedOnly = false
 ): Unsubscribe {
   const path = 'books';
   const booksRef = collection(db, path);
   const isBootstrapped = (userEmail || '').trim().toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL;
-  const q = isBootstrapped
-    ? query(booksRef, orderBy('updatedAt', 'desc'))
-    : query(booksRef, where('ownerId', '==', userId));
+  const q = publishedOnly
+    ? query(booksRef, where('publishStatus', '==', 'published'))
+    : isBootstrapped
+      ? query(booksRef, orderBy('updatedAt', 'desc'))
+      : readSharedCatalog
+        ? query(booksRef)
+        : query(booksRef, where('ownerId', '==', userId));
 
   return onSnapshot(
     q,
@@ -113,6 +119,8 @@ export async function createBook(
       board,
       grade,
       chapterCount: 0,
+      publishStatus: 'draft',
+      hasUnpublishedChanges: false,
       ownerId: userId,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
@@ -150,6 +158,34 @@ export async function updateBook(
       language: input.language,
       board,
       grade,
+      hasUnpublishedChanges: true,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function publishBook(bookId: string): Promise<void> {
+  const path = `books/${bookId}`;
+  try {
+    await updateDoc(doc(db, 'books', bookId), {
+      publishStatus: 'published',
+      hasUnpublishedChanges: false,
+      publishedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function unpublishBook(bookId: string): Promise<void> {
+  const path = `books/${bookId}`;
+  try {
+    await updateDoc(doc(db, 'books', bookId), {
+      publishStatus: 'draft',
+      hasUnpublishedChanges: false,
       updatedAt: serverTimestamp(),
     });
   } catch (error) {
@@ -184,14 +220,16 @@ export function subscribeToChapters(
   bookId: string,
   userId: string,
   userEmail: string | null | undefined,
-  onData: (chapters: Chapter[]) => void
+  onData: (chapters: Chapter[]) => void,
+  readSharedCatalog = false
 ): Unsubscribe {
   const path = `books/${bookId}/chapters`;
   const chaptersRef = collection(db, 'books', bookId, 'chapters');
   const isBootstrapped = (userEmail || '').trim().toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL;
-  const q = isBootstrapped
-    ? query(chaptersRef, orderBy('chapterNumber', 'asc'))
-    : query(chaptersRef, where('ownerId', '==', userId));
+  const q =
+    isBootstrapped || readSharedCatalog
+      ? query(chaptersRef, orderBy('chapterNumber', 'asc'))
+      : query(chaptersRef, where('ownerId', '==', userId));
 
   return onSnapshot(
     q,
@@ -246,6 +284,7 @@ export async function createChapter(
 
     batch.update(bookRef, {
       chapterCount: increment(1),
+      hasUnpublishedChanges: true,
       updatedAt: serverTimestamp(),
     });
 
@@ -296,6 +335,7 @@ export async function createChaptersBatch(
 
     batch.update(bookRef, {
       chapterCount: increment(validItems.length),
+      hasUnpublishedChanges: true,
       updatedAt: serverTimestamp(),
     });
 
@@ -311,14 +351,16 @@ export function subscribeToChapterPages(
   chapterId: string,
   userId: string,
   userEmail: string | null | undefined,
-  onData: (pages: ScannedPageRecord[]) => void
+  onData: (pages: ScannedPageRecord[]) => void,
+  readSharedCatalog = false
 ): Unsubscribe {
   const path = `books/${bookId}/chapters/${chapterId}/pages`;
   const pagesRef = collection(db, 'books', bookId, 'chapters', chapterId, 'pages');
   const isBootstrapped = (userEmail || '').trim().toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL;
-  const q = isBootstrapped
-    ? query(pagesRef, orderBy('pageNumber', 'asc'))
-    : query(pagesRef, where('ownerId', '==', userId));
+  const q =
+    isBootstrapped || readSharedCatalog
+      ? query(pagesRef, orderBy('pageNumber', 'asc'))
+      : query(pagesRef, where('ownerId', '==', userId));
 
   return onSnapshot(
     q,
@@ -410,6 +452,7 @@ export async function saveChapterContent(
     });
 
     batch.update(doc(db, 'books', bookId), {
+      hasUnpublishedChanges: true,
       updatedAt: serverTimestamp(),
     });
 
@@ -434,6 +477,7 @@ export async function deleteChapter(bookId: string, chapterId: string): Promise<
     batch.delete(doc(db, 'books', bookId, 'chapters', chapterId));
     batch.update(doc(db, 'books', bookId), {
       chapterCount: increment(-1),
+      hasUnpublishedChanges: true,
       updatedAt: serverTimestamp(),
     });
 
@@ -460,6 +504,7 @@ export async function deleteSavedPageImage(
       updatedAt: serverTimestamp(),
     });
     batch.update(doc(db, 'books', bookId), {
+      hasUnpublishedChanges: true,
       updatedAt: serverTimestamp(),
     });
     await batch.commit();

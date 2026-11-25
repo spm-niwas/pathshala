@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   getRedirectResult,
   onAuthStateChanged,
+  reauthenticateWithPopup,
   signInWithPopup,
   signInWithRedirect,
   signOut,
@@ -10,15 +11,22 @@ import {
 import {
   ArrowLeft,
   BookOpen,
+  Check,
   ChevronRight,
   Edit3,
+  EyeOff,
   FileText,
+  Globe,
   ListOrdered,
   Loader2,
   LogOut,
   Plus,
+  RefreshCw,
   Settings,
+  Shield,
   Trash2,
+  UploadCloud,
+  Users,
 } from 'lucide-react';
 import { doc, getDoc } from 'firebase/firestore';
 import { auth, db, googleProvider, testConnection } from '../lib/firebase';
@@ -28,35 +36,49 @@ import {
   deleteBookWithContents,
   deleteChapter,
   getTimestampMillis,
+  publishBook,
   sortBooksByLatestEdited,
   subscribeToBooks,
   subscribeToChapters,
+  unpublishBook,
   updateBook,
 } from '../services/firestoreBooks';
+import { subscribeToChildren } from '../services/firestoreChildren';
 import {
   subscribeToBoards,
   subscribeToClasses,
   subscribeToSubjects,
 } from '../services/firestoreMasters';
-import { subscribeToParents } from '../services/firestoreParents';
+import {
+  checkParentAuthorization,
+  ensureParentAccessSynced,
+  subscribeToParentAccessRecord,
+  subscribeToParents,
+  subscribeToParentSettings,
+} from '../services/firestoreParents';
 import {
   DEFAULT_SUBJECTS,
   type Book,
   type Chapter,
+  type ChildProfile,
   type MasterBoard,
   type MasterClass,
   type MasterSubject,
   type ParentAccount,
+  type ParentSettings,
 } from '../types/book';
 import { BookCoverGraphic } from './BookCoverGraphic';
 import { BookFormModal } from './BookFormModal';
 import { ChapterScanner } from './ChapterScanner';
 import { ConfirmDeleteDialog, type ConfirmDeleteTarget } from './ConfirmDeleteDialog';
+import { FamilyPortalApp } from './FamilyPortalApp';
 import { IndexScannerModal } from './IndexScannerModal';
 import { MastersPage } from './MastersPage';
 import { ParentsPage } from './ParentsPage';
 
 type ActiveSection = 'bookshelf' | 'masters' | 'parents';
+type AccountRole = 'none' | 'checking' | 'admin' | 'parent' | 'unauthorized';
+type AppMode = 'admin' | 'family';
 
 function formatEditedLabel(updatedAt: unknown, createdAt: unknown): string {
   const millis = Math.max(getTimestampMillis(updatedAt), getTimestampMillis(createdAt));
@@ -95,7 +117,11 @@ function formatEditedLabel(updatedAt: unknown, createdAt: unknown): string {
 export const AdminScannerApp: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
-  const [adminStatus, setAdminStatus] = useState<'none' | 'checking' | 'authorized' | 'unauthorized'>('none');
+  const [accountRole, setAccountRole] = useState<AccountRole>('none');
+  const [parentAccessSynced, setParentAccessSynced] = useState(true);
+  const [parentDisplayName, setParentDisplayName] = useState('');
+  const [appMode, setAppMode] = useState<AppMode>('admin');
+  const [familyHomeResetNonce, setFamilyHomeResetNonce] = useState(0);
   const [authError, setAuthError] = useState<string | null>(null);
 
   const [activeSection, setActiveSection] = useState<ActiveSection>('bookshelf');
@@ -112,6 +138,12 @@ export const AdminScannerApp: React.FC = () => {
   const [parents, setParents] = useState<ParentAccount[]>([]);
   const [parentsLoading, setParentsLoading] = useState(true);
 
+  const [childrenList, setChildrenList] = useState<ChildProfile[]>([]);
+  const [childrenLoading, setChildrenLoading] = useState(true);
+
+  const [parentSettings, setParentSettings] = useState<ParentSettings | null>(null);
+  const [parentSettingsLoading, setParentSettingsLoading] = useState(true);
+
   const [selectedBookId, setSelectedBookId] = useState<string | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [chaptersLoading, setChaptersLoading] = useState(false);
@@ -126,6 +158,7 @@ export const AdminScannerApp: React.FC = () => {
   const [creatingChapter, setCreatingChapter] = useState(false);
   const [showIndexScanner, setShowIndexScanner] = useState(false);
   const [indexSuccessMessage, setIndexSuccessMessage] = useState<string | null>(null);
+  const [publishingBookAction, setPublishingBookAction] = useState<'publish' | 'unpublish' | null>(null);
 
   const [deleteTarget, setDeleteTarget] = useState<ConfirmDeleteTarget | null>(null);
   const [showAccountMenu, setShowAccountMenu] = useState(false);
@@ -172,32 +205,57 @@ export const AdminScannerApp: React.FC = () => {
 
   useEffect(() => {
     if (!authReady || !user) {
-      setAdminStatus('none');
+      setAccountRole('none');
+      setParentAccessSynced(true);
+      setParentDisplayName('');
+      setAppMode('admin');
       return;
     }
 
     let cancelled = false;
-    const normalizedEmail = (user.email || '').toLowerCase();
+    const normalizedEmail = (user.email || '').trim().toLowerCase();
 
     if (normalizedEmail === 'director@spmniwas.in' && user.emailVerified) {
-      setAdminStatus('authorized');
+      setAccountRole('admin');
+      setParentAccessSynced(true);
+      setParentDisplayName(user.displayName || 'Admin');
+      setAppMode('admin');
       return;
     }
 
     if (!user.emailVerified) {
-      setAdminStatus('unauthorized');
+      setAccountRole('unauthorized');
       return;
     }
 
-    setAdminStatus('checking');
+    setAccountRole('checking');
     getDoc(doc(db, 'admins', user.uid))
-      .then((snap) => {
+      .then(async (snap) => {
         if (cancelled) return;
-        setAdminStatus(snap.exists() ? 'authorized' : 'unauthorized');
+        if (snap.exists()) {
+          setAccountRole('admin');
+          setParentAccessSynced(true);
+          setParentDisplayName(user.displayName || 'Admin');
+          setAppMode('admin');
+          return;
+        }
+
+        const parentResult = await checkParentAuthorization(user.email);
+        if (cancelled) return;
+        if (parentResult.authorized) {
+          setAccountRole('parent');
+          setParentAccessSynced(parentResult.accessSynced);
+          setParentDisplayName(
+            parentResult.parentName || user.displayName || user.email || 'Parent'
+          );
+          setAppMode('family');
+        } else {
+          setAccountRole('unauthorized');
+        }
       })
       .catch(() => {
         if (cancelled) return;
-        setAdminStatus('unauthorized');
+        setAccountRole('unauthorized');
       });
 
     return () => {
@@ -206,64 +264,153 @@ export const AdminScannerApp: React.FC = () => {
   }, [authReady, user]);
 
   useEffect(() => {
-    if (!authReady || !user || adminStatus !== 'authorized') {
+    const canReadCatalog =
+      accountRole === 'admin' || (accountRole === 'parent' && parentAccessSynced);
+
+    if (!authReady || !user || !canReadCatalog) {
       setBooks([]);
       setBoards([]);
       setClasses([]);
       setSubjects([]);
-      setParents([]);
       setBooksLoading(false);
       setMastersLoading(false);
-      setParentsLoading(false);
       return;
     }
 
     setBooksLoading(true);
     setMastersLoading(true);
-    setParentsLoading(true);
 
-    const unsubBooks = subscribeToBooks(user.uid, user.email, (loadedBooks) => {
-      setBooks(loadedBooks);
-      setBooksLoading(false);
-    });
-    const unsubBoards = subscribeToBoards(user.uid, user.email, (loadedBoards) => {
-      setBoards(loadedBoards);
-      setMastersLoading(false);
-    });
-    const unsubClasses = subscribeToClasses(user.uid, user.email, (loadedClasses) => {
-      setClasses(loadedClasses);
-    });
-    const unsubSubjects = subscribeToSubjects(user.uid, user.email, (loadedSubjects) => {
-      setSubjects(loadedSubjects);
-    });
-    const unsubParents = subscribeToParents(user.uid, user.email, (loadedParents) => {
-      setParents(loadedParents);
-      setParentsLoading(false);
-    });
+    const unsubBooks = subscribeToBooks(
+      user.uid,
+      user.email,
+      (loadedBooks) => {
+        setBooks(loadedBooks);
+        setBooksLoading(false);
+      },
+      true,
+      accountRole === 'parent'
+    );
+    const unsubBoards = subscribeToBoards(
+      user.uid,
+      user.email,
+      (loadedBoards) => {
+        setBoards(loadedBoards);
+        setMastersLoading(false);
+      },
+      true
+    );
+    const unsubClasses = subscribeToClasses(
+      user.uid,
+      user.email,
+      (loadedClasses) => {
+        setClasses(loadedClasses);
+      },
+      true
+    );
+    const unsubSubjects = subscribeToSubjects(
+      user.uid,
+      user.email,
+      (loadedSubjects) => {
+        setSubjects(loadedSubjects);
+      },
+      true
+    );
 
     return () => {
       unsubBooks();
       unsubBoards();
       unsubClasses();
       unsubSubjects();
-      unsubParents();
     };
-  }, [authReady, user, adminStatus]);
+  }, [authReady, user, accountRole, parentAccessSynced]);
 
   useEffect(() => {
-    if (!authReady || !user || adminStatus !== 'authorized' || !selectedBookId) {
+    if (!authReady || !user || accountRole !== 'admin') {
+      setParents([]);
+      setParentsLoading(false);
+      return;
+    }
+
+    setParentsLoading(true);
+    const unsubParents = subscribeToParents(user.uid, user.email, (loadedParents) => {
+      setParents(loadedParents);
+      setParentsLoading(false);
+      void ensureParentAccessSynced(user.uid, loadedParents);
+    });
+
+    return () => unsubParents();
+  }, [authReady, user, accountRole]);
+
+  useEffect(() => {
+    if (
+      !authReady ||
+      !user ||
+      !user.email ||
+      (accountRole !== 'admin' && accountRole !== 'parent')
+    ) {
+      setChildrenList([]);
+      setChildrenLoading(false);
+      setParentSettings(null);
+      setParentSettingsLoading(false);
+      return;
+    }
+
+    setChildrenLoading(true);
+    setParentSettingsLoading(true);
+
+    const unsubChildren = subscribeToChildren(user.email, (loadedChildren) => {
+      setChildrenList(loadedChildren);
+      setChildrenLoading(false);
+    });
+
+    const unsubParentSettings = subscribeToParentSettings(user.uid, (settings) => {
+      setParentSettings(settings);
+      setParentSettingsLoading(false);
+    });
+
+    const unsubParentAccess =
+      accountRole === 'parent'
+        ? subscribeToParentAccessRecord(user.email, (record) => {
+            if (record) {
+              setParentDisplayName(record.name);
+              setParentAccessSynced(record.accessSynced);
+            }
+          })
+        : () => {};
+
+    return () => {
+      unsubChildren();
+      unsubParentSettings();
+      unsubParentAccess();
+    };
+  }, [authReady, user, accountRole]);
+
+  useEffect(() => {
+    if (
+      !authReady ||
+      !user ||
+      accountRole !== 'admin' ||
+      appMode !== 'admin' ||
+      !selectedBookId
+    ) {
       setChapters([]);
       setChaptersLoading(false);
       return;
     }
 
     setChaptersLoading(true);
-    const unsub = subscribeToChapters(selectedBookId, user.uid, user.email, (loadedChapters) => {
-      setChapters(loadedChapters);
-      setChaptersLoading(false);
-    });
+    const unsub = subscribeToChapters(
+      selectedBookId,
+      user.uid,
+      user.email,
+      (loadedChapters) => {
+        setChapters(loadedChapters);
+        setChaptersLoading(false);
+      },
+      true
+    );
     return () => unsub();
-  }, [authReady, user, adminStatus, selectedBookId]);
+  }, [authReady, user, accountRole, appMode, selectedBookId]);
 
   const selectedBook = useMemo(
     () => books.find((b) => b.id === selectedBookId) ?? null,
@@ -290,6 +437,11 @@ export const AdminScannerApp: React.FC = () => {
       subjectFilter === 'All' ? books : books.filter((b) => b.subject === subjectFilter);
     return sortBooksByLatestEdited(matching);
   }, [books, subjectFilter]);
+
+  const publishedBooks = useMemo(
+    () => books.filter((b) => b.publishStatus === 'published'),
+    [books]
+  );
 
   const handleSignIn = async () => {
     setAuthError(null);
@@ -333,19 +485,45 @@ export const AdminScannerApp: React.FC = () => {
     await handleSignIn();
   };
 
-  const goToBookshelf = () => {
-    setActiveSection('bookshelf');
+  const handleReauthenticateWithGoogle = async () => {
+    if (!auth.currentUser) {
+      throw new Error('Please sign in with Google first.');
+    }
+    await reauthenticateWithPopup(auth.currentUser, googleProvider);
+  };
+
+  const switchMode = (nextMode: AppMode) => {
+    if (nextMode === 'admin' && accountRole !== 'admin') return;
+    setShowAccountMenu(false);
     setSelectedChapterId(null);
     setSelectedBookId(null);
+    setAppMode(nextMode);
+    if (nextMode === 'family') {
+      setFamilyHomeResetNonce((prev) => prev + 1);
+    }
+  };
+
+  const goToBookshelf = () => {
+    if (accountRole === 'admin') {
+      setAppMode('admin');
+      setActiveSection('bookshelf');
+      setSelectedChapterId(null);
+      setSelectedBookId(null);
+    } else if (accountRole === 'parent') {
+      setAppMode('family');
+      setFamilyHomeResetNonce((prev) => prev + 1);
+    }
   };
 
   const goToMasters = () => {
+    setAppMode('admin');
     setActiveSection('masters');
     setSelectedChapterId(null);
     setSelectedBookId(null);
   };
 
   const goToParents = () => {
+    setAppMode('admin');
     setActiveSection('parents');
     setSelectedChapterId(null);
     setSelectedBookId(null);
@@ -377,6 +555,35 @@ export const AdminScannerApp: React.FC = () => {
     }
   };
 
+  const handlePublishSelectedBook = async () => {
+    if (!selectedBook || publishingBookAction) return;
+    const isRepublish = selectedBook.publishStatus === 'published';
+    setPublishingBookAction('publish');
+    try {
+      await publishBook(selectedBook.id);
+      setIndexSuccessMessage(
+        isRepublish
+          ? `Republished "${selectedBook.title}". Latest updates are live for parents and children.`
+          : `Published "${selectedBook.title}". It is now available to parents and children.`
+      );
+    } finally {
+      setPublishingBookAction(null);
+    }
+  };
+
+  const handleUnpublishSelectedBook = async () => {
+    if (!selectedBook || publishingBookAction) return;
+    setPublishingBookAction('unpublish');
+    try {
+      await unpublishBook(selectedBook.id);
+      setIndexSuccessMessage(
+        `Moved "${selectedBook.title}" back to Draft. It is hidden from parents until published again.`
+      );
+    } finally {
+      setPublishingBookAction(null);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       {/* Top Bar Contract: 3 zones, <= 56px height */}
@@ -393,40 +600,56 @@ export const AdminScannerApp: React.FC = () => {
             Paathshala Studio
           </a>
 
-          {user && adminStatus === 'authorized' && (
-            <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600">
+          {user && (accountRole === 'admin' || accountRole === 'parent') && (
+            <nav className="hidden md:flex items-center gap-5 text-sm font-medium text-slate-600">
+              {accountRole === 'admin' && (
+                <>
+                  <button
+                    type="button"
+                    onClick={goToBookshelf}
+                    className={`py-1 transition-colors whitespace-nowrap shrink-0 ${
+                      appMode === 'admin' && activeSection === 'bookshelf'
+                        ? 'text-slate-900 underline underline-offset-8 decoration-2 decoration-blue-600'
+                        : 'hover:text-slate-900'
+                    }`}
+                  >
+                    Bookshelf
+                  </button>
+                  <button
+                    type="button"
+                    onClick={goToMasters}
+                    className={`py-1 transition-colors whitespace-nowrap shrink-0 ${
+                      appMode === 'admin' && activeSection === 'masters'
+                        ? 'text-slate-900 underline underline-offset-8 decoration-2 decoration-blue-600'
+                        : 'hover:text-slate-900'
+                    }`}
+                  >
+                    Masters
+                  </button>
+                  <button
+                    type="button"
+                    onClick={goToParents}
+                    className={`py-1 transition-colors whitespace-nowrap shrink-0 ${
+                      appMode === 'admin' && activeSection === 'parents'
+                        ? 'text-slate-900 underline underline-offset-8 decoration-2 decoration-blue-600'
+                        : 'hover:text-slate-900'
+                    }`}
+                  >
+                    Parents
+                  </button>
+                </>
+              )}
+
               <button
                 type="button"
-                onClick={goToBookshelf}
+                onClick={() => switchMode('family')}
                 className={`py-1 transition-colors whitespace-nowrap shrink-0 ${
-                  activeSection === 'bookshelf'
+                  appMode === 'family'
                     ? 'text-slate-900 underline underline-offset-8 decoration-2 decoration-blue-600'
                     : 'hover:text-slate-900'
                 }`}
               >
-                Bookshelf
-              </button>
-              <button
-                type="button"
-                onClick={goToMasters}
-                className={`py-1 transition-colors whitespace-nowrap shrink-0 ${
-                  activeSection === 'masters'
-                    ? 'text-slate-900 underline underline-offset-8 decoration-2 decoration-blue-600'
-                    : 'hover:text-slate-900'
-                }`}
-              >
-                Masters
-              </button>
-              <button
-                type="button"
-                onClick={goToParents}
-                className={`py-1 transition-colors whitespace-nowrap shrink-0 ${
-                  activeSection === 'parents'
-                    ? 'text-slate-900 underline underline-offset-8 decoration-2 decoration-blue-600'
-                    : 'hover:text-slate-900'
-                }`}
-              >
-                Parents
+                {accountRole === 'admin' ? 'Family App' : 'Family Home'}
               </button>
             </nav>
           )}
@@ -467,13 +690,55 @@ export const AdminScannerApp: React.FC = () => {
 
                       <div className="min-w-0 flex-1 font-sans">
                         <p className="font-sans text-sm font-semibold text-slate-900 truncate">
-                          {user.displayName || 'Admin User'}
+                          {parentDisplayName || user.displayName || 'Paathshala User'}
                         </p>
                         <p className="font-sans text-sm font-normal text-slate-500 truncate">
                           {user.email || ''}
                         </p>
                       </div>
                     </div>
+
+                    {(accountRole === 'admin' || accountRole === 'parent') && (
+                      <>
+                        <div className="border-t border-slate-100 my-3" />
+                        <div className="space-y-1">
+                          {accountRole === 'admin' && (
+                            <button
+                              type="button"
+                              role="menuitem"
+                              onClick={() => switchMode('admin')}
+                              className={`w-full min-h-[40px] px-3 py-1.5 font-sans text-sm font-medium rounded-xl transition-colors flex items-center justify-between ${
+                                appMode === 'admin'
+                                  ? 'bg-blue-50 text-blue-700'
+                                  : 'text-slate-700 hover:bg-slate-100'
+                              }`}
+                            >
+                              <span className="inline-flex items-center gap-2">
+                                <Shield className="w-4 h-4 shrink-0" />
+                                Admin Studio
+                              </span>
+                              {appMode === 'admin' && <Check className="w-4 h-4 shrink-0" />}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => switchMode('family')}
+                            className={`w-full min-h-[40px] px-3 py-1.5 font-sans text-sm font-medium rounded-xl transition-colors flex items-center justify-between ${
+                              appMode === 'family'
+                                ? 'bg-blue-50 text-blue-700'
+                                : 'text-slate-700 hover:bg-slate-100'
+                            }`}
+                          >
+                            <span className="inline-flex items-center gap-2">
+                              <Users className="w-4 h-4 shrink-0" />
+                              {accountRole === 'admin' ? 'Family App' : 'Family Home'}
+                            </span>
+                            {appMode === 'family' && <Check className="w-4 h-4 shrink-0" />}
+                          </button>
+                        </div>
+                      </>
+                    )}
 
                     <div className="border-t border-slate-100 my-3" />
 
@@ -503,8 +768,8 @@ export const AdminScannerApp: React.FC = () => {
       </header>
 
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-5 sm:py-8">
-        {/* Mobile Section Switcher (visible < md when not inside a chapter scanner) */}
-        {authReady && user && adminStatus === 'authorized' && !selectedChapter && (
+        {/* Mobile Section Switcher for Admin Mode (visible < md when not inside a chapter scanner) */}
+        {authReady && user && accountRole === 'admin' && appMode === 'admin' && !selectedChapter && (
           <div className="md:hidden grid grid-cols-3 gap-1 p-1 bg-slate-200/75 rounded-xl mb-5">
             <button
               type="button"
@@ -550,13 +815,13 @@ export const AdminScannerApp: React.FC = () => {
         ) : !user ? (
           <section className="max-w-lg mx-auto bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 mt-4 sm:mt-10">
             <p className="text-xs font-medium text-blue-700 mb-2">
-              Admin Mode · Class 3 CBSE
+              Paathshala Studio · Parent, Child &amp; Admin
             </p>
             <h1 className="font-display text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight mb-3 text-balance">
-              Scan her paper textbooks into your family library
+              School textbooks organized for your family
             </h1>
             <p className="text-sm sm:text-base text-slate-600 leading-relaxed mb-6">
-              Sign in with Google to manage Boards, Classes, and Subjects, snap page photos from your phone, read text with AI, and save chapters and diagram images to Firebase.
+              Sign in with your Google account. Registered parents can add child profiles with 4-digit child login codes and access textbooks made available by Admin.
             </p>
 
             {authError && (
@@ -573,21 +838,21 @@ export const AdminScannerApp: React.FC = () => {
               Sign in with Google
             </button>
           </section>
-        ) : adminStatus === 'checking' ? (
+        ) : accountRole === 'checking' ? (
           <div className="flex items-center justify-center py-24 text-sm text-slate-500 gap-2">
             <Loader2 className="w-4 h-4 animate-spin" />
             Checking account permissions...
           </div>
-        ) : adminStatus === 'unauthorized' ? (
+        ) : accountRole === 'unauthorized' ? (
           <section className="max-w-lg mx-auto bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 mt-4 sm:mt-10">
             <p className="text-xs font-medium text-amber-700 mb-2">
-              Admin Access Required
+              Registered Account Required
             </p>
             <h1 className="font-display text-xl sm:text-2xl font-bold text-slate-900 tracking-tight mb-2 text-balance">
               Signed in as {user.email}
             </h1>
             <p className="text-sm text-slate-600 leading-relaxed mb-6">
-              This account does not have Admin access to manage books or scan chapters. Sign out and choose <strong>director@spmniwas.in</strong> (tap <strong>Use another account</strong> on Google&apos;s screen if it isn&apos;t listed yet).
+              This Gmail address is not registered as a Parent or Admin yet. Ask the Admin (<strong>director@spmniwas.in</strong>) to add your Gmail under Parents, or switch to a registered Google account.
             </p>
 
             {authError && (
@@ -613,6 +878,23 @@ export const AdminScannerApp: React.FC = () => {
               </button>
             </div>
           </section>
+        ) : appMode === 'family' ? (
+          <FamilyPortalApp
+            userId={user.uid}
+            userEmail={user.email || ''}
+            parentName={parentDisplayName || user.displayName || 'Parent'}
+            accessSynced={parentAccessSynced}
+            parentSettings={parentSettings}
+            parentSettingsLoading={parentSettingsLoading}
+            childrenList={childrenList}
+            childrenLoading={childrenLoading}
+            books={publishedBooks}
+            booksLoading={booksLoading}
+            boards={boards}
+            classes={classes}
+            homeResetNonce={familyHomeResetNonce}
+            onReauthenticateWithGoogle={handleReauthenticateWithGoogle}
+          />
         ) : activeSection === 'masters' ? (
           <MastersPage
             userId={user.uid}
@@ -681,8 +963,8 @@ export const AdminScannerApp: React.FC = () => {
               </div>
             </div>
 
-            <div className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 mb-6">
-              <div>
+            <div className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="min-w-0">
                 <div className="flex items-center gap-1.5 mb-1.5">
                   <h1 className="font-display text-xl sm:text-2xl font-bold text-slate-900 text-balance">
                     {selectedBook.title}
@@ -708,7 +990,71 @@ export const AdminScannerApp: React.FC = () => {
                   <span>{selectedBook.board} {selectedBook.grade}</span>
                   <span aria-hidden="true">·</span>
                   <span className="tabular-nums">{chapters.length} chapters</span>
+                  <span aria-hidden="true">·</span>
+                  {selectedBook.publishStatus === 'published' ? (
+                    selectedBook.hasUnpublishedChanges ? (
+                      <span className="text-amber-700 font-medium">
+                        Published · Edited since last publish
+                      </span>
+                    ) : (
+                      <span className="text-emerald-700 font-medium inline-flex items-center gap-1">
+                        <Globe className="w-3.5 h-3.5 shrink-0" />
+                        Published ({formatEditedLabel(selectedBook.publishedAt, selectedBook.updatedAt)})
+                      </span>
+                    )
+                  ) : (
+                    <span className="text-slate-600 font-medium">
+                      Draft · Hidden from parents
+                    </span>
+                  )}
                 </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                {selectedBook.publishStatus === 'published' ? (
+                  <>
+                    <button
+                      type="button"
+                      disabled={publishingBookAction !== null}
+                      onClick={handlePublishSelectedBook}
+                      className={`min-h-[44px] px-4 py-2 text-sm font-medium rounded-xl transition-colors inline-flex items-center gap-2 whitespace-nowrap disabled:opacity-60 ${
+                        selectedBook.hasUnpublishedChanges
+                          ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                          : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200'
+                      }`}
+                    >
+                      {publishingBookAction === 'publish' ? (
+                        <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                      ) : (
+                        <RefreshCw className="w-4 h-4 shrink-0" />
+                      )}
+                      {publishingBookAction === 'publish' ? 'Republishing...' : 'Republish Book'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={publishingBookAction !== null}
+                      onClick={handleUnpublishSelectedBook}
+                      className="min-h-[44px] px-3.5 py-2 text-xs sm:text-sm font-medium text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 disabled:opacity-60 rounded-xl transition-colors inline-flex items-center gap-1.5 whitespace-nowrap"
+                    >
+                      <EyeOff className="w-4 h-4 shrink-0" />
+                      {publishingBookAction === 'unpublish' ? 'Hiding...' : 'Unpublish'}
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={publishingBookAction !== null}
+                    onClick={handlePublishSelectedBook}
+                    className="min-h-[44px] px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-sm font-medium rounded-xl transition-colors inline-flex items-center gap-2 whitespace-nowrap"
+                  >
+                    {publishingBookAction === 'publish' ? (
+                      <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                    ) : (
+                      <UploadCloud className="w-4 h-4 shrink-0" />
+                    )}
+                    {publishingBookAction === 'publish' ? 'Publishing...' : 'Publish Book'}
+                  </button>
+                )}
               </div>
             </div>
 
@@ -1014,6 +1360,18 @@ export const AdminScannerApp: React.FC = () => {
 
                           <p className="mt-2 text-[11px] text-slate-400 tabular-nums truncate">
                             {book.chapterCount} {book.chapterCount === 1 ? 'ch' : 'chs'}
+                            <span aria-hidden="true" className="mx-1 text-slate-300">
+                              ·
+                            </span>
+                            {book.publishStatus === 'published' ? (
+                              book.hasUnpublishedChanges ? (
+                                <span className="text-amber-600 font-medium">Edited</span>
+                              ) : (
+                                <span className="text-emerald-700 font-medium">Published</span>
+                              )
+                            ) : (
+                              <span className="text-slate-500">Draft</span>
+                            )}
                             <span aria-hidden="true" className="mx-1 text-slate-300">
                               ·
                             </span>
